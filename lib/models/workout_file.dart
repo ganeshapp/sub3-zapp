@@ -69,4 +69,29 @@ class WorkoutFile {
   }
 
   static double _rad(double deg) => deg * pi / 180;
+
+  /// Interpolate virtual lat/lon position along the GPX route for a given distance.
+  (double lat, double lon)? interpolatePosition(double distanceM) {
+    if (gpxPoints == null || gpxPoints!.length < 2) return null;
+    final pts = gpxPoints!;
+
+    if (distanceM <= 0) return (pts.first.lat, pts.first.lon);
+    if (distanceM >= pts.last.cumulativeDistanceM) {
+      return (pts.last.lat, pts.last.lon);
+    }
+
+    for (var i = 0; i < pts.length - 1; i++) {
+      if (pts[i + 1].cumulativeDistanceM >= distanceM) {
+        final segLen =
+            pts[i + 1].cumulativeDistanceM - pts[i].cumulativeDistanceM;
+        if (segLen <= 0) return (pts[i].lat, pts[i].lon);
+        final t = (distanceM - pts[i].cumulativeDistanceM) / segLen;
+        return (
+          pts[i].lat + (pts[i + 1].lat - pts[i].lat) * t,
+          pts[i].lon + (pts[i + 1].lon - pts[i].lon) * t,
+        );
+      }
+    }
+    return (pts.last.lat, pts.last.lon);
+  }
 }

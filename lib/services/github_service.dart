@@ -4,13 +4,19 @@ import 'package:http/http.dart' as http;
 class GitHubFile {
   final String name;
   final String downloadUrl;
+  final String sha;
 
-  const GitHubFile({required this.name, required this.downloadUrl});
+  const GitHubFile({
+    required this.name,
+    required this.downloadUrl,
+    required this.sha,
+  });
 
   factory GitHubFile.fromJson(Map<String, dynamic> json) {
     return GitHubFile(
       name: json['name'] as String,
       downloadUrl: json['download_url'] as String,
+      sha: json['sha'] as String? ?? '',
     );
   }
 }

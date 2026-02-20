@@ -7,6 +7,8 @@ class TelemetryPoint {
   final double inclinePct;
   final double cumulativeDistanceKm;
   final double? paceMinPerKm;
+  final double? latitude;
+  final double? longitude;
 
   const TelemetryPoint({
     required this.elapsedSeconds,
@@ -16,5 +18,7 @@ class TelemetryPoint {
     required this.inclinePct,
     required this.cumulativeDistanceKm,
     this.paceMinPerKm,
+    this.latitude,
+    this.longitude,
   });
 }

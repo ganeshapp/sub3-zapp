@@ -13,13 +13,15 @@ Pick the APK that matches your device architecture:
 
 ## Features
 
-- **Cloud Workout Library** -- Browse and download structured JSON workouts and GPX virtual routes from a public GitHub repository.
-- **BLE Device Pairing** -- Connect to FTMS treadmills and heart rate monitors (chest straps, Garmin watches) via Bluetooth Low Energy.
-- **Live Workout Dashboard** -- Real-time metrics (HR, pace, speed, incline, cadence, distance) with a 2D visualizer for intervals and elevation profiles.
+- **Cloud Workout Library** -- Browse and download structured JSON workouts and GPX virtual routes from a public GitHub repository. Rich card UI with mini visualizers (bar charts for intervals, 2D route maps for GPX).
+- **SHA-Based Caching** -- Library metadata and preview data are cached locally keyed by GitHub SHA. Only changed files are re-fetched, so the Library tab opens instantly on subsequent launches.
+- **BLE Device Pairing** -- Connect to FTMS treadmills, heart rate monitors, and Running Speed and Cadence sensors (Garmin watches) via Bluetooth Low Energy.
+- **Live Workout Dashboard** -- Real-time metrics (HR, pace, speed, incline, cadence, distance) with a 2D visualizer for intervals and top-down route maps for GPX.
+- **Virtual GPS Tracking** -- GPX workouts interpolate your virtual lat/lon position in real time, producing TCX files with Position tags so Strava renders a proper route map.
 - **Automated Treadmill Control** -- The app sends FTMS speed and incline commands for JSON workouts, and incline-only commands with look-ahead for GPX routes.
 - **Manual Override Detection** -- If you change the treadmill speed manually mid-interval, the app detects it and stops overriding until the next block.
 - **Strava Integration** -- Upload completed runs to Strava as TCX files with `trainer=1` and `sport_type=VirtualRun` to stay off real-world leaderboards. Uses proper OAuth Authorization Code flow with secure token storage.
-- **Stats and History** -- Weekly and monthly running volume summaries with a full run history. Export any past session as a TCX file.
+- **Stats and History** -- Weekly and monthly running volume summaries with a full run history. Export or delete any past session.
 - **Wakelock** -- Screen stays on during active workouts to maintain BLE connections. Automatically disabled on pause, stop, or discard.
 
 ## Permissions

@@ -15,6 +15,33 @@ class WorkoutParser {
     return _parseJson(name, content);
   }
 
+  /// Parse raw content by filename extension.
+  static WorkoutFile parseContent(String fileName, String content) {
+    if (fileName.endsWith('.gpx')) {
+      return _parseGpx(fileName, content);
+    }
+    return _parseJson(fileName, content);
+  }
+
+  /// Extract the display name from JSON metadata or GPX name element.
+  static String extractDisplayName(String fileName, String content) {
+    try {
+      if (fileName.endsWith('.gpx')) {
+        final doc = XmlDocument.parse(content);
+        final nameEl = doc.findAllElements('name').firstOrNull;
+        if (nameEl != null && nameEl.innerText.isNotEmpty) {
+          return nameEl.innerText;
+        }
+      } else {
+        final json = jsonDecode(content);
+        final meta = json['metadata'];
+        if (meta != null && meta['name'] != null) return meta['name'];
+        if (json['name'] != null) return json['name'];
+      }
+    } catch (_) {}
+    return fileName.replaceAll(RegExp(r'\.(json|gpx)$'), '');
+  }
+
   // ── JSON Structured Workout ──
 
   static WorkoutFile _parseJson(String name, String content) {
@@ -23,11 +50,20 @@ class WorkoutParser {
 
     final intervals = rawIntervals.map((block) {
       return WorkoutInterval(
-        durationSeconds: (block['duration'] as num?)?.toInt() ?? 0,
-        speedKmh: (block['speed'] as num?)?.toDouble() ?? 0.0,
-        inclinePct: (block['incline'] as num?)?.toDouble() ?? 0.0,
+        durationSeconds: (block['duration'] as num?)?.toInt() ??
+            (block['duration_seconds'] as num?)?.toInt() ??
+            (block['time'] as num?)?.toInt() ??
+            0,
+        speedKmh: (block['speed'] as num?)?.toDouble() ??
+            (block['speed_kmh'] as num?)?.toDouble() ??
+            (block['pace'] as num?)?.toDouble() ??
+            0.0,
+        inclinePct: (block['incline'] as num?)?.toDouble() ??
+            (block['incline_pct'] as num?)?.toDouble() ??
+            (block['gradient'] as num?)?.toDouble() ??
+            0.0,
       );
-    }).toList();
+    }).where((i) => i.durationSeconds > 0).toList();
 
     return WorkoutFile(name: name, isGpx: false, intervals: intervals);
   }

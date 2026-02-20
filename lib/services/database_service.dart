@@ -18,7 +18,7 @@ class DatabaseService {
 
     return openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE library_items (
@@ -27,7 +27,10 @@ class DatabaseService {
             type TEXT NOT NULL,
             file_path TEXT,
             completion_count INTEGER NOT NULL DEFAULT 0,
-            best_time_seconds INTEGER
+            best_time_seconds INTEGER,
+            sha TEXT,
+            metadata_json TEXT,
+            preview_points TEXT
           )
         ''');
         await db.execute('''
@@ -45,6 +48,16 @@ class DatabaseService {
             is_uploaded_to_strava INTEGER NOT NULL DEFAULT 0
           )
         ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute(
+              'ALTER TABLE library_items ADD COLUMN sha TEXT');
+          await db.execute(
+              'ALTER TABLE library_items ADD COLUMN metadata_json TEXT');
+          await db.execute(
+              'ALTER TABLE library_items ADD COLUMN preview_points TEXT');
+        }
       },
     );
   }
@@ -88,6 +101,25 @@ class DatabaseService {
     await db.update(
       'library_items',
       {'file_path': filePath},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  static Future<void> updateCachedPreview({
+    required int id,
+    required String sha,
+    required String metadataJson,
+    required String previewPoints,
+  }) async {
+    final db = await database;
+    await db.update(
+      'library_items',
+      {
+        'sha': sha,
+        'metadata_json': metadataJson,
+        'preview_points': previewPoints,
+      },
       where: 'id = ?',
       whereArgs: [id],
     );

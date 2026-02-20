@@ -165,14 +165,18 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
     final s = state;
     if (s == null) return;
 
-    switch (s.phase) {
-      case WorkoutPhase.countdown:
-        _handleCountdown(s);
-      case WorkoutPhase.running:
-        _handleRunningTick(s);
-      case WorkoutPhase.paused:
-      case WorkoutPhase.finished:
-        break;
+    try {
+      switch (s.phase) {
+        case WorkoutPhase.countdown:
+          _handleCountdown(s);
+        case WorkoutPhase.running:
+          _handleRunningTick(s);
+        case WorkoutPhase.paused:
+        case WorkoutPhase.finished:
+          break;
+      }
+    } catch (_) {
+      // Prevent timer death from uncaught exceptions
     }
   }
 
@@ -214,6 +218,17 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
     // Current pace: min/km = 60 / speed  (guard div-by-zero)
     final currentPace = speedKmh > 0 ? 60.0 / speedKmh : 0.0;
 
+    // Interpolate virtual GPS position for GPX routes
+    double? lat;
+    double? lon;
+    if (s.workoutFile.isGpx) {
+      final pos = s.workoutFile.interpolatePosition(totalDist * 1000);
+      if (pos != null) {
+        lat = pos.$1;
+        lon = pos.$2;
+      }
+    }
+
     // Running averages from telemetry
     final newTelemetry = List<TelemetryPoint>.from(s.telemetry)
       ..add(TelemetryPoint(
@@ -224,6 +239,8 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
         inclinePct: incline,
         cumulativeDistanceKm: totalDist,
         paceMinPerKm: currentPace,
+        latitude: lat,
+        longitude: lon,
       ));
 
     final n = newTelemetry.length;
@@ -242,19 +259,24 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
 
     if (!s.workoutFile.isGpx && s.workoutFile.intervals != null) {
       final intervals = s.workoutFile.intervals!;
+
+      // Check total workout duration first as a safeguard
+      final totalDuration = s.workoutFile.totalDurationSeconds;
+      if (totalDuration > 0 && elapsed >= totalDuration) {
+        _finishWorkout();
+        return;
+      }
+
+      // Advance past completed intervals (handles edge cases safely)
       if (segIdx < intervals.length &&
+          intervals[segIdx].durationSeconds > 0 &&
           segElapsed >= intervals[segIdx].durationSeconds) {
-        // Advance to next interval block
         segIdx++;
         segElapsed = 0;
         FtmsService.instance.resetManualOverride();
         overrideActive = false;
         if (segIdx < intervals.length) {
           _sendSegmentCommands(segmentIndex: segIdx);
-        } else {
-          // Workout complete
-          _finishWorkout();
-          return;
         }
       }
     }

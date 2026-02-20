@@ -3,43 +3,77 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import '../models/library_item.dart';
-import '../services/github_service.dart';
 import '../services/database_service.dart';
+import '../services/github_service.dart';
+import '../services/library_sync_service.dart';
 
-/// Merged view: cloud file listing + local DB state for each item type.
+/// Manages the library list: serves cached items instantly, then syncs with
+/// GitHub in the background using SHA comparison.
 class LibraryListNotifier extends AsyncNotifier<List<LibraryItem>> {
   LibraryItemType get _type => LibraryItemType.workout;
+  bool _syncing = false;
 
   @override
-  Future<List<LibraryItem>> build() => _refresh();
+  Future<List<LibraryItem>> build() async {
+    final cached = await LibrarySyncService.getCached(_type);
+    // Trigger background sync without blocking the initial load
+    _backgroundSync();
+    return cached;
+  }
 
-  Future<List<LibraryItem>> _refresh() async {
-    final cloudFiles = _type == LibraryItemType.workout
-        ? await GitHubService.fetchWorkouts()
-        : await GitHubService.fetchVirtualRuns();
-
-    final items = <LibraryItem>[];
-    for (final file in cloudFiles) {
-      final existing = await DatabaseService.getLibraryItemByName(file.name);
-      if (existing != null) {
-        items.add(existing);
-      } else {
-        items.add(LibraryItem(name: file.name, type: _type));
+  Future<void> _backgroundSync() async {
+    if (_syncing) return;
+    _syncing = true;
+    try {
+      final synced = await LibrarySyncService.syncWithGitHub(
+        type: _type,
+        onProgress: (partial) {
+          state = AsyncValue.data(partial);
+        },
+      );
+      state = AsyncValue.data(synced);
+    } catch (e) {
+      // If sync fails, keep the cached data that's already loaded
+      final current = state.valueOrNull;
+      if (current == null || current.isEmpty) {
+        state = AsyncValue.error(e, StackTrace.current);
       }
+    } finally {
+      _syncing = false;
     }
-    return items;
   }
 
   Future<void> refreshFromCloud() async {
     state = const AsyncValue.loading();
-    state = await AsyncValue.guard(_refresh);
+    _syncing = false;
+    try {
+      final cached = await LibrarySyncService.getCached(_type);
+      if (cached.isNotEmpty) {
+        state = AsyncValue.data(cached);
+      }
+      final synced = await LibrarySyncService.syncWithGitHub(
+        type: _type,
+        onProgress: (partial) {
+          state = AsyncValue.data(partial);
+        },
+      );
+      state = AsyncValue.data(synced);
+    } catch (e) {
+      final cached = await LibrarySyncService.getCached(_type);
+      if (cached.isNotEmpty) {
+        state = AsyncValue.data(cached);
+      } else {
+        state = AsyncValue.error(e, StackTrace.current);
+      }
+    }
   }
 
   Future<void> downloadFile(String fileName, String downloadUrl) async {
     final content = await GitHubService.downloadFileContent(downloadUrl);
 
     final dir = await getApplicationDocumentsDirectory();
-    final subDir = _type == LibraryItemType.workout ? 'workouts' : 'virtualrun';
+    final subDir =
+        _type == LibraryItemType.workout ? 'workouts' : 'virtualrun';
     final folder = Directory(p.join(dir.path, subDir));
     if (!folder.existsSync()) folder.createSync(recursive: true);
 
@@ -55,7 +89,8 @@ class LibraryListNotifier extends AsyncNotifier<List<LibraryItem>> {
       );
     }
 
-    state = await AsyncValue.guard(_refresh);
+    final updated = await LibrarySyncService.getCached(_type);
+    state = AsyncValue.data(updated);
   }
 }
 
@@ -78,28 +113,3 @@ final virtualRunsProvider =
     AsyncNotifierProvider<VirtualRunsNotifier, List<LibraryItem>>(
   VirtualRunsNotifier.new,
 );
-
-/// Holds the download URLs fetched from GitHub, keyed by file name.
-final _cloudUrlCacheProvider =
-    StateProvider<Map<String, String>>((ref) => {});
-
-/// Fetches cloud URLs once and caches them for the download buttons.
-final workoutCloudUrlsProvider = FutureProvider<Map<String, String>>((ref) async {
-  final files = await GitHubService.fetchWorkouts();
-  final map = {for (final f in files) f.name: f.downloadUrl};
-  ref.read(_cloudUrlCacheProvider.notifier).state = {
-    ...ref.read(_cloudUrlCacheProvider),
-    ...map,
-  };
-  return map;
-});
-
-final virtualRunCloudUrlsProvider = FutureProvider<Map<String, String>>((ref) async {
-  final files = await GitHubService.fetchVirtualRuns();
-  final map = {for (final f in files) f.name: f.downloadUrl};
-  ref.read(_cloudUrlCacheProvider.notifier).state = {
-    ...ref.read(_cloudUrlCacheProvider),
-    ...map,
-  };
-  return map;
-});

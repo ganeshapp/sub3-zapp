@@ -56,6 +56,14 @@ class TcxGenerator {
       buf.writeln('          <Trackpoint>');
       buf.writeln(
           '            <Time>${_fmtTime(pointTime)}</Time>');
+      if (tp.latitude != null && tp.longitude != null) {
+        buf.writeln('            <Position>');
+        buf.writeln(
+            '              <LatitudeDegrees>${tp.latitude!.toStringAsFixed(7)}</LatitudeDegrees>');
+        buf.writeln(
+            '              <LongitudeDegrees>${tp.longitude!.toStringAsFixed(7)}</LongitudeDegrees>');
+        buf.writeln('            </Position>');
+      }
       buf.writeln(
           '            <DistanceMeters>${distM.toStringAsFixed(1)}</DistanceMeters>');
 
