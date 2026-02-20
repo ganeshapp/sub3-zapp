@@ -23,9 +23,9 @@ class WorkoutParser {
 
     final intervals = rawIntervals.map((block) {
       return WorkoutInterval(
-        durationSeconds: (block['duration'] as num).toInt(),
-        speedKmh: (block['speed'] as num).toDouble(),
-        inclinePct: ((block['incline'] ?? 0) as num).toDouble(),
+        durationSeconds: (block['duration'] as num?)?.toInt() ?? 0,
+        speedKmh: (block['speed'] as num?)?.toDouble() ?? 0.0,
+        inclinePct: (block['incline'] as num?)?.toDouble() ?? 0.0,
       );
     }).toList();
 

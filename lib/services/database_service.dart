@@ -118,4 +118,13 @@ class DatabaseService {
       whereArgs: [id],
     );
   }
+
+  static Future<void> deleteSession(int id) async {
+    final db = await database;
+    await db.delete(
+      'workout_sessions',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
 }

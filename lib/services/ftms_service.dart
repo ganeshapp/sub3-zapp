@@ -3,11 +3,12 @@ import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'ble_service.dart';
 
-/// FTMS characteristic UUIDs.
-class _FtmsUuids {
+/// BLE characteristic UUIDs.
+class _CharUuids {
   static final treadmillData = Guid('00002acd-0000-1000-8000-00805f9b34fb');
   static final controlPoint = Guid('00002ad9-0000-1000-8000-00805f9b34fb');
   static final hrMeasurement = Guid('00002a37-0000-1000-8000-00805f9b34fb');
+  static final rscMeasurement = Guid('00002a53-0000-1000-8000-00805f9b34fb');
 }
 
 /// Parsed snapshot from the FTMS Treadmill Data characteristic.
@@ -40,12 +41,17 @@ class FtmsService {
 
   StreamSubscription? _ftmsDataSub;
   StreamSubscription? _hrDataSub;
+  StreamSubscription? _rscDataSub;
 
   FtmsReading _lastFtms = const FtmsReading(speedKmh: 0);
   HrReading _lastHr = const HrReading(heartRate: 0);
+  int? _rscCadence;
 
   FtmsReading get lastFtms => _lastFtms;
-  HrReading get lastHr => _lastHr;
+  HrReading get lastHr => HrReading(
+        heartRate: _lastHr.heartRate,
+        cadence: _lastHr.cadence ?? _rscCadence,
+      );
 
   double _lastCommandedSpeedKmh = 0;
   bool _manualOverrideActive = false;
@@ -60,6 +66,7 @@ class FtmsService {
   Future<void> startListening() async {
     await _subscribeFtms();
     await _subscribeHr();
+    await _subscribeRsc();
   }
 
   Future<void> _subscribeFtms() async {
@@ -67,7 +74,7 @@ class FtmsService {
     if (device == null) return;
 
     final char = _findCharacteristic(device, BleUuids.ftmsTreadmill,
-        _FtmsUuids.treadmillData);
+        _CharUuids.treadmillData);
     if (char == null) return;
 
     await char.setNotifyValue(true);
@@ -80,12 +87,25 @@ class FtmsService {
     if (device == null) return;
 
     final char = _findCharacteristic(device, BleUuids.heartRate,
-        _FtmsUuids.hrMeasurement);
+        _CharUuids.hrMeasurement);
     if (char == null) return;
 
     await char.setNotifyValue(true);
     _hrDataSub?.cancel();
     _hrDataSub = char.onValueReceived.listen(_parseHrData);
+  }
+
+  Future<void> _subscribeRsc() async {
+    final device = BleService.instance.hrSensor;
+    if (device == null) return;
+
+    final char = _findCharacteristic(
+        device, BleUuids.runningSpeedCadence, _CharUuids.rscMeasurement);
+    if (char == null) return;
+
+    await char.setNotifyValue(true);
+    _rscDataSub?.cancel();
+    _rscDataSub = char.onValueReceived.listen(_parseRscData);
   }
 
   BluetoothCharacteristic? _findCharacteristic(
@@ -185,6 +205,14 @@ class FtmsService {
     _lastHr = HrReading(heartRate: hr, cadence: cadence);
   }
 
+  // ── Parse RSC Measurement (0x2A53) ──
+
+  void _parseRscData(List<int> value) {
+    if (value.length < 4) return;
+    // Byte 0: flags, Bytes 1-2: speed (uint16, 1/256 m/s), Byte 3: cadence (uint8)
+    _rscCadence = value[3];
+  }
+
   // ── FTMS Control Point Writes ──
 
   Future<void> _writeControlPoint(List<int> payload) async {
@@ -192,7 +220,7 @@ class FtmsService {
     if (device == null) return;
 
     final char = _findCharacteristic(device, BleUuids.ftmsTreadmill,
-        _FtmsUuids.controlPoint);
+        _CharUuids.controlPoint);
     if (char == null) return;
 
     await char.write(payload, withoutResponse: false);
@@ -255,10 +283,13 @@ class FtmsService {
   void dispose() {
     _ftmsDataSub?.cancel();
     _hrDataSub?.cancel();
+    _rscDataSub?.cancel();
     _ftmsDataSub = null;
     _hrDataSub = null;
+    _rscDataSub = null;
     _lastFtms = const FtmsReading(speedKmh: 0);
     _lastHr = const HrReading(heartRate: 0);
+    _rscCadence = null;
     _lastCommandedSpeedKmh = 0;
     _manualOverrideActive = false;
   }

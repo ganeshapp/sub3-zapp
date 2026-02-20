@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../models/workout_session.dart';
 import '../providers/stats_provider.dart';
+import '../services/database_service.dart';
 import '../services/tcx_file_manager.dart';
 
 class StatsScreen extends ConsumerWidget {
@@ -184,19 +185,19 @@ class _VolumeCard extends StatelessWidget {
 
 // ── History card ──
 
-class _HistoryCard extends StatelessWidget {
+class _HistoryCard extends ConsumerWidget {
   final WorkoutSession session;
   const _HistoryCard({required this.session});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final isGpx = session.type == 'gpx';
     final displayName =
         session.fileName.replaceAll(RegExp(r'\.(json|gpx)$'), '');
 
     return GestureDetector(
-      onLongPress: () => _showExportMenu(context),
+      onLongPress: () => _showActionsMenu(context, ref),
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -279,6 +280,7 @@ class _HistoryCard extends StatelessWidget {
               color: const Color(0xFF2C2C2C),
               onSelected: (v) {
                 if (v == 'export') _exportTcx(context);
+                if (v == 'delete') _deleteWorkout(context, ref);
               },
               itemBuilder: (_) => [
                 const PopupMenuItem(
@@ -291,6 +293,17 @@ class _HistoryCard extends StatelessWidget {
                     ],
                   ),
                 ),
+                const PopupMenuItem(
+                  value: 'delete',
+                  child: Row(
+                    children: [
+                      Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text('Delete Workout',
+                          style: TextStyle(color: Colors.red)),
+                    ],
+                  ),
+                ),
               ],
             ),
           ],
@@ -299,7 +312,7 @@ class _HistoryCard extends StatelessWidget {
     );
   }
 
-  void _showExportMenu(BuildContext context) {
+  void _showActionsMenu(BuildContext context, WidgetRef ref) {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF2C2C2C),
@@ -327,11 +340,69 @@ class _HistoryCard extends StatelessWidget {
                 _exportTcx(context);
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline, color: Colors.red),
+              title:
+                  const Text('Delete Workout', style: TextStyle(color: Colors.red)),
+              subtitle: const Text('Remove from history'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _deleteWorkout(context, ref);
+              },
+            ),
             const SizedBox(height: 8),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _deleteWorkout(BuildContext context, WidgetRef ref) async {
+    if (session.id == null) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF2C2C2C),
+        title: const Text('Delete Workout?'),
+        content: const Text('This will permanently remove this run from your history.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      await DatabaseService.deleteSession(session.id!);
+      ref.invalidate(statsProvider);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Workout deleted.'),
+            backgroundColor: Colors.green.shade700,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Delete failed: $e'),
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _exportTcx(BuildContext context) async {

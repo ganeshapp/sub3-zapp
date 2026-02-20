@@ -5,6 +5,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 class BleUuids {
   static final ftmsTreadmill = Guid('00001826-0000-1000-8000-00805f9b34fb');
   static final heartRate = Guid('0000180d-0000-1000-8000-00805f9b34fb');
+  static final runningSpeedCadence = Guid('00001814-0000-1000-8000-00805f9b34fb');
 }
 
 enum BleDeviceRole { treadmill, heartRate }
@@ -48,7 +49,7 @@ class BleService {
   Future<void> startScan({Duration timeout = const Duration(seconds: 10)}) async {
     if (FlutterBluePlus.isScanningNow) return;
     await FlutterBluePlus.startScan(
-      withServices: [BleUuids.ftmsTreadmill, BleUuids.heartRate],
+      withServices: [BleUuids.ftmsTreadmill, BleUuids.heartRate, BleUuids.runningSpeedCadence],
       timeout: timeout,
       androidUsesFineLocation: false,
     );
