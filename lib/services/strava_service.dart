@@ -1,84 +1,77 @@
 import 'dart:convert';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
-
-class StravaConfig {
-  static const clientId = 'YOUR_STRAVA_CLIENT_ID';
-  static const clientSecret = 'YOUR_STRAVA_CLIENT_SECRET';
-  static const redirectUri = 'sub3://strava/callback';
-  static const authUrl = 'https://www.strava.com/oauth/authorize';
-  static const tokenUrl = 'https://www.strava.com/oauth/token';
-  static const uploadUrl = 'https://www.strava.com/api/v3/uploads';
-}
 
 class StravaService {
+  static const _storage = FlutterSecureStorage();
+
   static const _keyAccessToken = 'strava_access_token';
   static const _keyRefreshToken = 'strava_refresh_token';
   static const _keyExpiresAt = 'strava_expires_at';
-  static const _keyAthleteId = 'strava_athlete_id';
 
-  // ── Token storage ──
+  static const _redirectUri = 'sub3://sub3.app/callback';
+  static const _authUrl = 'https://www.strava.com/oauth/authorize';
+  static const _tokenUrl = 'https://www.strava.com/oauth/token';
+  static const _uploadUrl = 'https://www.strava.com/api/v3/uploads';
+
+  static String get _clientId => dotenv.env['STRAVA_CLIENT_ID'] ?? '';
+  static String get _clientSecret => dotenv.env['STRAVA_CLIENT_SECRET'] ?? '';
+
+  // ── Token checks ──
 
   static Future<bool> get isLinked async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_keyAccessToken) != null;
+    final token = await _storage.read(key: _keyAccessToken);
+    return token != null && token.isNotEmpty;
   }
 
   static Future<String?> get accessToken async {
-    final prefs = await SharedPreferences.getInstance();
-    final expiresAt = prefs.getInt(_keyExpiresAt) ?? 0;
+    final expiresStr = await _storage.read(key: _keyExpiresAt);
+    final expiresAt = int.tryParse(expiresStr ?? '') ?? 0;
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 
     if (now >= expiresAt) {
       return _refreshToken();
     }
-    return prefs.getString(_keyAccessToken);
+    return _storage.read(key: _keyAccessToken);
   }
 
-  static Future<void> saveTokens({
-    required String accessToken,
-    required String refreshToken,
-    required int expiresAt,
-    int? athleteId,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_keyAccessToken, accessToken);
-    await prefs.setString(_keyRefreshToken, refreshToken);
-    await prefs.setInt(_keyExpiresAt, expiresAt);
-    if (athleteId != null) {
-      await prefs.setInt(_keyAthleteId, athleteId);
+  // ── OAuth Authorization Code flow ──
+
+  static Future<bool> launchOAuth() async {
+    if (_clientId.isEmpty || _clientSecret.isEmpty) {
+      throw Exception(
+        'Strava credentials not configured. '
+        'Set STRAVA_CLIENT_ID and STRAVA_CLIENT_SECRET in .env',
+      );
     }
-  }
 
-  static Future<void> clearTokens() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_keyAccessToken);
-    await prefs.remove(_keyRefreshToken);
-    await prefs.remove(_keyExpiresAt);
-    await prefs.remove(_keyAthleteId);
-  }
-
-  // ── OAuth flow ──
-
-  static Future<void> launchOAuth() async {
-    final uri = Uri.parse(StravaConfig.authUrl).replace(queryParameters: {
-      'client_id': StravaConfig.clientId,
-      'redirect_uri': StravaConfig.redirectUri,
+    final authUri = Uri.parse(_authUrl).replace(queryParameters: {
+      'client_id': _clientId,
+      'redirect_uri': _redirectUri,
       'response_type': 'code',
-      'scope': 'activity:write',
+      'scope': 'activity:write,read',
       'approval_prompt': 'auto',
     });
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+
+    final resultUrl = await FlutterWebAuth2.authenticate(
+      url: authUri.toString(),
+      callbackUrlScheme: 'sub3',
+    );
+
+    final code = Uri.parse(resultUrl).queryParameters['code'];
+    if (code == null || code.isEmpty) return false;
+
+    return _exchangeCode(code);
   }
 
-  /// Exchange the authorization code for access + refresh tokens.
-  static Future<bool> exchangeCode(String code) async {
+  static Future<bool> _exchangeCode(String code) async {
     final response = await http.post(
-      Uri.parse(StravaConfig.tokenUrl),
+      Uri.parse(_tokenUrl),
       body: {
-        'client_id': StravaConfig.clientId,
-        'client_secret': StravaConfig.clientSecret,
+        'client_id': _clientId,
+        'client_secret': _clientSecret,
         'code': code,
         'grant_type': 'authorization_code',
       },
@@ -87,25 +80,25 @@ class StravaService {
     if (response.statusCode != 200) return false;
 
     final json = jsonDecode(response.body);
-    await saveTokens(
+    await _saveTokens(
       accessToken: json['access_token'],
       refreshToken: json['refresh_token'],
       expiresAt: json['expires_at'],
-      athleteId: json['athlete']?['id'],
     );
     return true;
   }
 
+  // ── Token refresh ──
+
   static Future<String?> _refreshToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    final refresh = prefs.getString(_keyRefreshToken);
+    final refresh = await _storage.read(key: _keyRefreshToken);
     if (refresh == null) return null;
 
     final response = await http.post(
-      Uri.parse(StravaConfig.tokenUrl),
+      Uri.parse(_tokenUrl),
       body: {
-        'client_id': StravaConfig.clientId,
-        'client_secret': StravaConfig.clientSecret,
+        'client_id': _clientId,
+        'client_secret': _clientSecret,
         'refresh_token': refresh,
         'grant_type': 'refresh_token',
       },
@@ -114,7 +107,7 @@ class StravaService {
     if (response.statusCode != 200) return null;
 
     final json = jsonDecode(response.body);
-    await saveTokens(
+    await _saveTokens(
       accessToken: json['access_token'],
       refreshToken: json['refresh_token'],
       expiresAt: json['expires_at'],
@@ -122,10 +115,26 @@ class StravaService {
     return json['access_token'];
   }
 
+  // ── Token persistence (secure storage) ──
+
+  static Future<void> _saveTokens({
+    required String accessToken,
+    required String refreshToken,
+    required int expiresAt,
+  }) async {
+    await _storage.write(key: _keyAccessToken, value: accessToken);
+    await _storage.write(key: _keyRefreshToken, value: refreshToken);
+    await _storage.write(key: _keyExpiresAt, value: expiresAt.toString());
+  }
+
+  static Future<void> clearTokens() async {
+    await _storage.delete(key: _keyAccessToken);
+    await _storage.delete(key: _keyRefreshToken);
+    await _storage.delete(key: _keyExpiresAt);
+  }
+
   // ── Upload TCX ──
 
-  /// Uploads a TCX string to Strava.
-  /// Returns the upload ID on success, throws on failure.
   static Future<int> uploadTcx({
     required String tcxContent,
     required String activityName,
@@ -135,13 +144,13 @@ class StravaService {
       throw Exception('Not authenticated with Strava');
     }
 
-    final request = http.MultipartRequest('POST', Uri.parse(StravaConfig.uploadUrl))
+    final request = http.MultipartRequest('POST', Uri.parse(_uploadUrl))
       ..headers['Authorization'] = 'Bearer $token'
       ..fields['data_type'] = 'tcx'
       ..fields['trainer'] = '1'
       ..fields['sport_type'] = 'VirtualRun'
       ..fields['name'] = activityName
-      ..fields['description'] = 'Uploaded from Sub3 App'
+      ..fields['description'] = 'Uploaded from Sub3'
       ..files.add(http.MultipartFile.fromString(
         'file',
         tcxContent,

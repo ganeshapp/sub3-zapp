@@ -45,11 +45,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Future<void> _toggleStrava(bool enable) async {
     if (enable) {
-      await StravaService.launchOAuth();
-      Future.delayed(const Duration(seconds: 2), () async {
-        final linked = await StravaService.isLinked;
-        if (mounted) setState(() => _stravaLinked = linked);
-      });
+      try {
+        final success = await StravaService.launchOAuth();
+        if (mounted) setState(() => _stravaLinked = success);
+        if (mounted && !success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Strava authorization failed. Please try again.'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('$e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
     } else {
       final confirm = await showDialog<bool>(
         context: context,
