@@ -164,7 +164,11 @@ class LibrarySyncService {
         final wf = WorkoutParser.parseContent(fileName, content);
         final intervals = wf.intervals ?? [];
         return intervals
-            .map((i) => {'d': i.durationSeconds, 's': i.speedKmh})
+            .map((i) => {
+                  'd': i.durationSeconds,
+                  's': i.speedKmh,
+                  't': i.type,
+                })
             .toList();
       }
     } catch (_) {

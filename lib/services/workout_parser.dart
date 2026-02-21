@@ -48,6 +48,8 @@ class WorkoutParser {
     final json = jsonDecode(content);
     final List<dynamic> rawIntervals = json['intervals'] ?? json['blocks'] ?? [];
 
+    final displayName = extractDisplayName(name, content);
+
     final intervals = rawIntervals.map((block) {
       return WorkoutInterval(
         durationSeconds: (block['duration'] as num?)?.toInt() ??
@@ -62,16 +64,23 @@ class WorkoutParser {
             (block['incline_pct'] as num?)?.toDouble() ??
             (block['gradient'] as num?)?.toDouble() ??
             0.0,
+        type: (block['type'] as String?) ?? 'active',
       );
     }).where((i) => i.durationSeconds > 0).toList();
 
-    return WorkoutFile(name: name, isGpx: false, intervals: intervals);
+    return WorkoutFile(
+      name: name,
+      displayName: displayName,
+      isGpx: false,
+      intervals: intervals,
+    );
   }
 
   // ── GPX Virtual Run ──
 
   static WorkoutFile _parseGpx(String name, String content) {
     final doc = XmlDocument.parse(content);
+    final displayName = extractDisplayName(name, content);
     final trkpts = doc.findAllElements('trkpt');
 
     final points = <GpxPoint>[];
@@ -102,6 +111,7 @@ class WorkoutParser {
 
     return WorkoutFile(
       name: name,
+      displayName: displayName,
       isGpx: true,
       gpxPoints: points,
       smoothedElevations: smoothed,

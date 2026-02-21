@@ -44,8 +44,7 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
                 children: [
                   // Title
                   Text(
-                    workout.workoutFile.name
-                        .replaceAll(RegExp(r'\.(json|gpx)$'), ''),
+                    workout.workoutFile.displayName,
                     style: GoogleFonts.inter(
                       fontSize: 22,
                       fontWeight: FontWeight.w700,
@@ -299,12 +298,9 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
         totalTimeSeconds: w.elapsedSeconds,
       );
 
-      final activityName = w.workoutFile.name
-          .replaceAll(RegExp(r'\.(json|gpx)$'), '');
-
       await StravaService.uploadTcx(
         tcxContent: tcx,
-        activityName: 'Sub3 $activityName',
+        activityName: 'Sub3 ${w.workoutFile.displayName}',
       );
 
       // Mark as uploaded in DB

@@ -353,6 +353,25 @@ class _MiniBarPainter extends CustomPainter {
   final List<dynamic> bars;
   _MiniBarPainter({required this.bars});
 
+  static Color _colorForType(String type) {
+    switch (type) {
+      case 'warmup':
+        return const Color(0xFF4FC3F7);
+      case 'cooldown':
+        return const Color(0xFF4FC3F7);
+      case 'recovery':
+      case 'rest':
+        return const Color(0xFF66BB6A);
+      case 'active':
+      case 'interval':
+      case 'threshold':
+      case 'tempo':
+        return const Color(0xFFEF5350);
+      default:
+        return const Color(0xFFEF5350);
+    }
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     if (bars.isEmpty) return;
@@ -369,27 +388,31 @@ class _MiniBarPainter extends CustomPainter {
 
     const hPad = 6.0;
     const vPad = 8.0;
+    const gap = 1.0;
     final drawW = size.width - hPad * 2;
     final drawH = size.height - vPad * 2;
-
-    final barPaint = Paint()..color = Colors.red.withValues(alpha: 0.25);
-    final borderPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.5
-      ..color = Colors.red.withValues(alpha: 0.15);
 
     double x = hPad;
     for (final b in bars) {
       final d = ((b as Map)['d'] as num?)?.toInt() ?? 0;
       final s = (b['s'] as num?)?.toDouble() ?? 0;
-      final w = (d / totalDur) * drawW;
+      final t = (b['t'] as String?) ?? 'active';
+      final color = _colorForType(t);
+
+      final w = (d / totalDur) * drawW - gap;
       final h = (s / maxSpeed) * drawH;
+      if (w <= 0) continue;
       final rect = Rect.fromLTWH(x, size.height - vPad - h, w, h);
       canvas.drawRRect(
-          RRect.fromRectAndRadius(rect, const Radius.circular(2)), barPaint);
+          RRect.fromRectAndRadius(rect, const Radius.circular(2)),
+          Paint()..color = color.withValues(alpha: 0.35));
       canvas.drawRRect(
-          RRect.fromRectAndRadius(rect, const Radius.circular(2)), borderPaint);
-      x += w;
+          RRect.fromRectAndRadius(rect, const Radius.circular(2)),
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 0.5
+            ..color = color.withValues(alpha: 0.2));
+      x += w + gap;
     }
   }
 

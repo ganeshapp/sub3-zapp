@@ -99,27 +99,15 @@ class _DashboardView extends ConsumerWidget {
                   color: isPaused ? Colors.amber : Colors.white,
                 ),
               ),
-              if (workout.manualOverrideActive)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: Colors.amber.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text('MANUAL',
-                      style: GoogleFonts.inter(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.amber)),
+              Flexible(
+                child: Text(
+                  workout.workoutFile.displayName,
+                  style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.white38),
+                  overflow: TextOverflow.ellipsis,
                 ),
-              Text(
-                workout.workoutFile.name.replaceAll(RegExp(r'\.(json|gpx)$'), ''),
-                style: GoogleFonts.inter(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white38),
-                overflow: TextOverflow.ellipsis,
               ),
             ],
           ),
@@ -196,6 +184,61 @@ class _DashboardView extends ConsumerWidget {
                   unit: 'bpm',
                 ),
               ],
+            ),
+          ),
+
+          // Manual control toggle
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: GestureDetector(
+              onTap: () => ref
+                  .read(activeWorkoutProvider.notifier)
+                  .toggleManualControl(),
+              child: Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: workout.isManualControlEnabled
+                      ? Colors.amber.withValues(alpha: 0.15)
+                      : Colors.white.withValues(alpha: 0.04),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: workout.isManualControlEnabled
+                        ? Colors.amber
+                        : Colors.white12,
+                    width: 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      workout.isManualControlEnabled
+                          ? Icons.pan_tool
+                          : Icons.smart_toy,
+                      size: 16,
+                      color: workout.isManualControlEnabled
+                          ? Colors.amber
+                          : Colors.white38,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      workout.isManualControlEnabled
+                          ? 'MANUAL CONTROL'
+                          : 'AUTO CONTROL',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: workout.isManualControlEnabled
+                            ? Colors.amber
+                            : Colors.white38,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
 

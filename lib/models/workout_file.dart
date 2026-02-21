@@ -5,11 +5,13 @@ class WorkoutInterval {
   final int durationSeconds;
   final double speedKmh;
   final double inclinePct;
+  final String type;
 
   const WorkoutInterval({
     required this.durationSeconds,
     required this.speedKmh,
     required this.inclinePct,
+    this.type = 'active',
   });
 }
 
@@ -31,6 +33,7 @@ class GpxPoint {
 /// Parsed workout file — either JSON intervals or GPX route.
 class WorkoutFile {
   final String name;
+  final String displayName;
   final bool isGpx;
 
   /// Non-null for JSON workouts.
@@ -44,6 +47,7 @@ class WorkoutFile {
 
   const WorkoutFile({
     required this.name,
+    required this.displayName,
     required this.isGpx,
     this.intervals,
     this.gpxPoints,

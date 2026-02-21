@@ -147,7 +147,6 @@ class StravaService {
     final request = http.MultipartRequest('POST', Uri.parse(_uploadUrl))
       ..headers['Authorization'] = 'Bearer $token'
       ..fields['data_type'] = 'tcx'
-      ..fields['trainer'] = '1'
       ..fields['sport_type'] = 'VirtualRun'
       ..fields['name'] = activityName
       ..fields['description'] = 'Uploaded from Sub3'

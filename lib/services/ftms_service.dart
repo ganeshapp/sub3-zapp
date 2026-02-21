@@ -53,13 +53,7 @@ class FtmsService {
         cadence: _lastHr.cadence ?? _rscCadence,
       );
 
-  double _lastCommandedSpeedKmh = 0;
-  bool _manualOverrideActive = false;
-
-  bool get manualOverrideActive => _manualOverrideActive;
-
-  /// Threshold for detecting manual speed override (km/h).
-  static const _overrideThreshold = 0.5;
+  
 
   // ── Subscribe to BLE notifications ──
 
@@ -163,12 +157,6 @@ class FtmsService {
       totalDistanceM: totalDist,
       inclinePct: incline,
     );
-
-    // Manual override detection: physical speed differs from commanded speed
-    if (_lastCommandedSpeedKmh > 0 &&
-        (speed - _lastCommandedSpeedKmh).abs() > _overrideThreshold) {
-      _manualOverrideActive = true;
-    }
   }
 
   // ── Parse Heart Rate Measurement (0x2A37) ──
@@ -246,10 +234,8 @@ class FtmsService {
     await _writeControlPoint([0x08, 0x02]);
   }
 
-  /// Set target speed in km/h. Records the command for override detection.
+  /// Set target speed in km/h.
   Future<void> setTargetSpeed(double kmh) async {
-    _lastCommandedSpeedKmh = kmh;
-    _manualOverrideActive = false;
     final raw = (kmh * 100).round();
     final lo = raw & 0xFF;
     final hi = (raw >> 8) & 0xFF;
@@ -263,11 +249,6 @@ class FtmsService {
     final lo = level & 0xFF;
     final hi = (level >> 8) & 0xFF;
     await _writeControlPoint([0x03, lo, hi]);
-  }
-
-  /// Reset the manual override flag at the start of a new interval block.
-  void resetManualOverride() {
-    _manualOverrideActive = false;
   }
 
   // ── Incline Clamping ──
@@ -290,7 +271,5 @@ class FtmsService {
     _lastFtms = const FtmsReading(speedKmh: 0);
     _lastHr = const HrReading(heartRate: 0);
     _rscCadence = null;
-    _lastCommandedSpeedKmh = 0;
-    _manualOverrideActive = false;
   }
 }

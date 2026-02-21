@@ -33,7 +33,7 @@ class ActiveWorkoutState {
   // JSON workout segment tracking
   final int currentSegmentIndex;
   final int segmentElapsedSeconds;
-  final bool manualOverrideActive;
+  final bool isManualControlEnabled;
 
   // Telemetry array for TCX export
   final List<TelemetryPoint> telemetry;
@@ -54,7 +54,7 @@ class ActiveWorkoutState {
     this.avgPaceMinPerKm = 0,
     this.currentSegmentIndex = 0,
     this.segmentElapsedSeconds = 0,
-    this.manualOverrideActive = false,
+    this.isManualControlEnabled = false,
     this.telemetry = const [],
   });
 
@@ -73,7 +73,7 @@ class ActiveWorkoutState {
     double? avgPaceMinPerKm,
     int? currentSegmentIndex,
     int? segmentElapsedSeconds,
-    bool? manualOverrideActive,
+    bool? isManualControlEnabled,
     List<TelemetryPoint>? telemetry,
   }) {
     return ActiveWorkoutState(
@@ -93,8 +93,8 @@ class ActiveWorkoutState {
       currentSegmentIndex: currentSegmentIndex ?? this.currentSegmentIndex,
       segmentElapsedSeconds:
           segmentElapsedSeconds ?? this.segmentElapsedSeconds,
-      manualOverrideActive:
-          manualOverrideActive ?? this.manualOverrideActive,
+      isManualControlEnabled:
+          isManualControlEnabled ?? this.isManualControlEnabled,
       telemetry: telemetry ?? this.telemetry,
     );
   }
@@ -255,7 +255,6 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
     // JSON segment tracking
     var segIdx = s.currentSegmentIndex;
     var segElapsed = s.segmentElapsedSeconds + 1;
-    var overrideActive = FtmsService.instance.manualOverrideActive;
 
     if (!s.workoutFile.isGpx && s.workoutFile.intervals != null) {
       final intervals = s.workoutFile.intervals!;
@@ -273,9 +272,7 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
           segElapsed >= intervals[segIdx].durationSeconds) {
         segIdx++;
         segElapsed = 0;
-        FtmsService.instance.resetManualOverride();
-        overrideActive = false;
-        if (segIdx < intervals.length) {
+        if (segIdx < intervals.length && !s.isManualControlEnabled) {
           _sendSegmentCommands(segmentIndex: segIdx);
         }
       }
@@ -288,8 +285,8 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
       return;
     }
 
-    // GPX incline control (look-ahead)
-    if (s.workoutFile.isGpx) {
+    // GPX incline control (look-ahead) -- only when not in manual mode
+    if (s.workoutFile.isGpx && !s.isManualControlEnabled) {
       _sendGpxIncline(totalDist, s.workoutFile);
     }
 
@@ -306,7 +303,6 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
       avgPaceMinPerKm: avgPace,
       currentSegmentIndex: segIdx,
       segmentElapsedSeconds: segElapsed,
-      manualOverrideActive: overrideActive,
       telemetry: newTelemetry,
     );
   }
@@ -316,6 +312,7 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
   Future<void> _sendSegmentCommands({int? segmentIndex}) async {
     final s = state;
     if (s == null || s.workoutFile.isGpx) return;
+    if (s.isManualControlEnabled) return;
     final intervals = s.workoutFile.intervals;
     if (intervals == null) return;
 
@@ -324,9 +321,7 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
 
     final block = intervals[idx];
     try {
-      if (!FtmsService.instance.manualOverrideActive) {
-        await FtmsService.instance.setTargetSpeed(block.speedKmh);
-      }
+      await FtmsService.instance.setTargetSpeed(block.speedKmh);
       await FtmsService.instance.setTargetIncline(block.inclinePct);
     } catch (_) {}
   }
@@ -370,6 +365,26 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
   }
 
   // ── Controls ──
+
+  /// Toggle manual control. When switching back to auto, immediately
+  /// re-send the current segment's target speed and incline.
+  Future<void> toggleManualControl() async {
+    final s = state;
+    if (s == null || s.phase != WorkoutPhase.running) return;
+
+    final wasManual = s.isManualControlEnabled;
+    state = s.copyWith(isManualControlEnabled: !wasManual);
+
+    if (wasManual) {
+      // Returning to auto: sync treadmill to the current workout plan
+      if (!s.workoutFile.isGpx) {
+        _sendSegmentCommands();
+      } else {
+        _lastSentGpxIncline = -1;
+        _sendGpxIncline(s.totalDistanceKm, s.workoutFile);
+      }
+    }
+  }
 
   Future<void> pauseWorkout() async {
     if (state?.phase != WorkoutPhase.running) return;
