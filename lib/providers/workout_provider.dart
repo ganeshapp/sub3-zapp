@@ -135,6 +135,8 @@ class ActiveWorkoutState {
 
 class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
   Timer? _timer;
+  int _zeroSpeedTicks = 0;
+  bool _beltHasMoved = false;
 
   @override
   ActiveWorkoutState? build() => null;
@@ -142,6 +144,8 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
   // ── Lifecycle ──
 
   Future<void> startWorkout(WorkoutFile file) async {
+    _zeroSpeedTicks = 0;
+    _beltHasMoved = false;
     WakelockPlus.enable();
     BleService.instance.enableAutoReconnect();
 
@@ -290,6 +294,19 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
       _sendGpxIncline(totalDist, s.workoutFile);
     }
 
+    // Detect treadmill physical stop: if belt was moving but now reports
+    // 0 speed for 5 consecutive seconds, auto-finish the workout.
+    if (speedKmh > 0.5) {
+      _beltHasMoved = true;
+      _zeroSpeedTicks = 0;
+    } else if (_beltHasMoved && speedKmh < 0.1) {
+      _zeroSpeedTicks++;
+      if (_zeroSpeedTicks >= 5) {
+        _finishWorkout();
+        return;
+      }
+    }
+
     state = s.copyWith(
       elapsedSeconds: elapsed,
       currentSpeedKmh: speedKmh,
@@ -425,6 +442,8 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
   void clear() {
     _timer?.cancel();
     _timer = null;
+    _zeroSpeedTicks = 0;
+    _beltHasMoved = false;
     WakelockPlus.disable();
     state = null;
   }

@@ -9,6 +9,10 @@ import 'github_service.dart';
 import 'workout_parser.dart';
 
 class LibrarySyncService {
+  /// Bump this whenever the parser or metadata extraction logic changes
+  /// to force all cached items to be re-synced.
+  static const _cacheVersion = 3;
+
   /// Get cached items from local DB for the given type.
   static Future<List<LibraryItem>> getCached(LibraryItemType type) {
     return DatabaseService.getLibraryItems(type);
@@ -34,7 +38,8 @@ class LibrarySyncService {
       if (existing != null &&
           existing.sha == file.sha &&
           existing.hasCachedPreview &&
-          existing.sha != null) {
+          existing.sha != null &&
+          _cachedVersionMatches(existing)) {
         result.add(existing);
         continue;
       }
@@ -81,6 +86,16 @@ class LibrarySyncService {
     return result;
   }
 
+  static bool _cachedVersionMatches(LibraryItem item) {
+    if (item.metadataJson == null) return false;
+    try {
+      final meta = jsonDecode(item.metadataJson!) as Map<String, dynamic>;
+      return meta['_v'] == _cacheVersion;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Future<String> _saveFile(
       String name, String content, LibraryItemType type) async {
     final dir = await getApplicationDocumentsDirectory();
@@ -110,6 +125,7 @@ class LibrarySyncService {
           }
         }
         return {
+          '_v': _cacheVersion,
           'name': displayName,
           'distanceKm': double.parse(distKm.toStringAsFixed(2)),
           'elevationGain': elevGain.round(),
@@ -125,6 +141,7 @@ class LibrarySyncService {
             ? wf.intervals!.map((i) => i.speedKmh).reduce(max)
             : 0.0;
         return {
+          '_v': _cacheVersion,
           'name': displayName,
           'description': meta?['description'] as String?,
           'totalDurationSeconds': (meta?['total_duration_seconds'] as num?)?.toInt() ??
@@ -137,7 +154,10 @@ class LibrarySyncService {
         };
       }
     } catch (_) {
-      return {'name': fileName.replaceAll(RegExp(r'\.(json|gpx)$'), '')};
+      return {
+        '_v': _cacheVersion,
+        'name': fileName.replaceAll(RegExp(r'\.(json|gpx)$'), ''),
+      };
     }
   }
 
