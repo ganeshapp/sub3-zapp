@@ -75,15 +75,26 @@ class _CountdownView extends StatelessWidget {
 
 // ── Live dashboard ──
 
-class _DashboardView extends ConsumerWidget {
+class _DashboardView extends ConsumerStatefulWidget {
   final ActiveWorkoutState workout;
   const _DashboardView({required this.workout});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_DashboardView> createState() => _DashboardViewState();
+}
+
+class _DashboardViewState extends ConsumerState<_DashboardView> {
+  bool _confirmingStop = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final workout = widget.workout;
     final isPaused = workout.phase == WorkoutPhase.paused;
 
-    return Padding(
+    return GestureDetector(
+      onTap: _confirmingStop ? () => setState(() => _confirmingStop = false) : null,
+      behavior: HitTestBehavior.translucent,
+      child: Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Column(
         children: [
@@ -245,85 +256,91 @@ class _DashboardView extends ConsumerWidget {
           // Control buttons
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              children: [
-                // STOP
-                Expanded(
-                  child: SizedBox(
-                    height: 54,
-                    child: OutlinedButton.icon(
-                      onPressed: () => _confirmStop(context, ref),
-                      icon: const Icon(Icons.stop, size: 22),
-                      label: const Text('STOP'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.red,
-                        side: const BorderSide(color: Colors.red, width: 1.5),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14)),
-                        textStyle: GoogleFonts.inter(
-                            fontSize: 15, fontWeight: FontWeight.w700),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                // PAUSE / RESUME
-                Expanded(
-                  flex: 2,
-                  child: SizedBox(
-                    height: 54,
+            child: _confirmingStop
+                ? SizedBox(
+                    width: double.infinity,
+                    height: 64,
                     child: FilledButton.icon(
                       onPressed: () {
-                        if (isPaused) {
-                          ref.read(activeWorkoutProvider.notifier).resumeWorkout();
-                        } else {
-                          ref.read(activeWorkoutProvider.notifier).pauseWorkout();
-                        }
+                        setState(() => _confirmingStop = false);
+                        ref
+                            .read(activeWorkoutProvider.notifier)
+                            .stopWorkout();
                       },
-                      icon: Icon(isPaused ? Icons.play_arrow : Icons.pause,
-                          size: 24),
-                      label: Text(isPaused ? 'RESUME' : 'PAUSE'),
+                      icon: const Icon(Icons.stop, size: 28),
+                      label: const Text('CONFIRM STOP'),
                       style: FilledButton.styleFrom(
-                        backgroundColor:
-                            isPaused ? Colors.green : Colors.amber.shade800,
+                        backgroundColor: Colors.red,
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14)),
                         textStyle: GoogleFonts.inter(
-                            fontSize: 15, fontWeight: FontWeight.w700),
+                            fontSize: 18, fontWeight: FontWeight.w800),
                       ),
                     ),
+                  )
+                : Row(
+                    children: [
+                      // STOP
+                      Expanded(
+                        child: SizedBox(
+                          height: 54,
+                          child: OutlinedButton.icon(
+                            onPressed: () =>
+                                setState(() => _confirmingStop = true),
+                            icon: const Icon(Icons.stop, size: 22),
+                            label: const Text('STOP'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.red,
+                              side: const BorderSide(
+                                  color: Colors.red, width: 1.5),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14)),
+                              textStyle: GoogleFonts.inter(
+                                  fontSize: 15, fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // PAUSE / RESUME
+                      Expanded(
+                        flex: 2,
+                        child: SizedBox(
+                          height: 54,
+                          child: FilledButton.icon(
+                            onPressed: () {
+                              if (isPaused) {
+                                ref
+                                    .read(activeWorkoutProvider.notifier)
+                                    .resumeWorkout();
+                              } else {
+                                ref
+                                    .read(activeWorkoutProvider.notifier)
+                                    .pauseWorkout();
+                              }
+                            },
+                            icon: Icon(
+                                isPaused ? Icons.play_arrow : Icons.pause,
+                                size: 24),
+                            label: Text(isPaused ? 'RESUME' : 'PAUSE'),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: isPaused
+                                  ? Colors.green
+                                  : Colors.amber.shade800,
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14)),
+                              textStyle: GoogleFonts.inter(
+                                  fontSize: 15, fontWeight: FontWeight.w700),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-              ],
-            ),
           ),
         ],
       ),
-    );
-  }
-
-  void _confirmStop(BuildContext context, WidgetRef ref) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2C2C2C),
-        title: const Text('End Workout?'),
-        content: const Text('This will stop the treadmill and end the session.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              ref.read(activeWorkoutProvider.notifier).stopWorkout();
-            },
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            child: const Text('Stop'),
-          ),
-        ],
-      ),
+    ),
     );
   }
 

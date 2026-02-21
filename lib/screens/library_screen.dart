@@ -258,8 +258,16 @@ class _RichCard extends StatelessWidget {
       } else {
         final dur = (meta['totalDurationSeconds'] as num?)?.toInt() ?? 0;
         if (dur > 0) parts.add(_fmtDuration(dur));
+        final dist = (meta['totalDistanceKm'] as num?)?.toDouble();
+        if (dist != null && dist > 0) {
+          parts.add('${dist.toStringAsFixed(1)} km');
+        }
         final maxSpd = (meta['maxSpeed'] as num?)?.toDouble() ?? 0;
-        if (maxSpd > 0) parts.add('${maxSpd.toStringAsFixed(1)} km/h peak');
+        if (maxSpd > 0) parts.add('${maxSpd.toStringAsFixed(1)} km/h');
+        final pace = meta['averagePace'] as String?;
+        if (pace != null) parts.add(pace);
+        final elev = (meta['elevationGainM'] as num?)?.toInt();
+        if (elev != null && elev > 0) parts.add('$elev m');
       }
     }
 

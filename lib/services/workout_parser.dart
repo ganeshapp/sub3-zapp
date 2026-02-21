@@ -58,10 +58,12 @@ class WorkoutParser {
             0,
         speedKmh: (block['speed'] as num?)?.toDouble() ??
             (block['speed_kmh'] as num?)?.toDouble() ??
+            (block['start_speed_kmh'] as num?)?.toDouble() ??
             (block['pace'] as num?)?.toDouble() ??
             0.0,
         inclinePct: (block['incline'] as num?)?.toDouble() ??
             (block['incline_pct'] as num?)?.toDouble() ??
+            (block['start_incline_pct'] as num?)?.toDouble() ??
             (block['gradient'] as num?)?.toDouble() ??
             0.0,
         type: (block['type'] as String?) ?? 'active',

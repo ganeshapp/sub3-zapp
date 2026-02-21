@@ -31,7 +31,10 @@ class LibrarySyncService {
     for (final file in cloudFiles) {
       final existing = await DatabaseService.getLibraryItemByName(file.name);
 
-      if (existing != null && existing.sha == file.sha && existing.hasCachedPreview) {
+      if (existing != null &&
+          existing.sha == file.sha &&
+          existing.hasCachedPreview &&
+          existing.sha != null) {
         result.add(existing);
         continue;
       }
@@ -113,6 +116,8 @@ class LibrarySyncService {
           'pointCount': wf.gpxPoints?.length ?? 0,
         };
       } else {
+        final json = jsonDecode(content);
+        final meta = json['metadata'] as Map<String, dynamic>?;
         final wf = WorkoutParser.parseContent(fileName, content);
         final displayName =
             WorkoutParser.extractDisplayName(fileName, content);
@@ -121,7 +126,12 @@ class LibrarySyncService {
             : 0.0;
         return {
           'name': displayName,
-          'totalDurationSeconds': wf.totalDurationSeconds,
+          'description': meta?['description'] as String?,
+          'totalDurationSeconds': (meta?['total_duration_seconds'] as num?)?.toInt() ??
+              wf.totalDurationSeconds,
+          'totalDistanceKm': (meta?['total_distance_km'] as num?)?.toDouble(),
+          'averagePace': meta?['average_pace'] as String?,
+          'elevationGainM': (meta?['total_elevation_gain_m'] as num?)?.toInt(),
           'maxSpeed': double.parse(maxSpeed.toStringAsFixed(1)),
           'intervalCount': wf.intervals?.length ?? 0,
         };
