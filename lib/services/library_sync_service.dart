@@ -3,15 +3,17 @@ import 'dart:io';
 import 'dart:math';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import 'package:xml/xml.dart';
 import '../models/library_item.dart';
 import 'database_service.dart';
+import 'elevation_service.dart';
 import 'github_service.dart';
 import 'workout_parser.dart';
 
 class LibrarySyncService {
   /// Bump this whenever the parser or metadata extraction logic changes
   /// to force all cached items to be re-synced.
-  static const _cacheVersion = 3;
+  static const _cacheVersion = 4;
 
   /// Get cached items from local DB for the given type.
   static Future<List<LibraryItem>> getCached(LibraryItemType type) {
@@ -46,8 +48,14 @@ class LibrarySyncService {
 
       // SHA changed or no cached preview -- fetch and parse
       try {
-        final content =
+        var content =
             await GitHubService.downloadFileContent(file.downloadUrl);
+
+        // GPX files without <ele> tags: fetch elevation from DEM API
+        if (file.name.endsWith('.gpx')) {
+          content = await _augmentGpxWithElevation(content);
+        }
+
         final metadata = _extractMetadata(file.name, content);
         final preview = _extractPreviewPoints(file.name, content);
 
@@ -93,6 +101,43 @@ class LibrarySyncService {
       return meta['_v'] == _cacheVersion;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// If the GPX content has no elevation tags, fetch elevation data
+  /// from the Open-Elevation API and inject it into the XML.
+  static Future<String> _augmentGpxWithElevation(String content) async {
+    try {
+      final doc = XmlDocument.parse(content);
+      final trkpts = doc.findAllElements('trkpt').toList();
+      if (trkpts.isEmpty) return content;
+
+      // Check if any point already has elevation
+      final hasEle = trkpts.any((pt) => pt.findElements('ele').isNotEmpty);
+      if (hasEle) return content;
+
+      // Extract coordinates
+      final coords = trkpts.map((pt) {
+        final lat = double.parse(pt.getAttribute('lat')!);
+        final lon = double.parse(pt.getAttribute('lon')!);
+        return (lat: lat, lon: lon);
+      }).toList();
+
+      final elevations = await ElevationService.fetchElevations(coords);
+      if (elevations == null) return content;
+
+      // Inject <ele> into each trkpt
+      for (var i = 0; i < trkpts.length && i < elevations.length; i++) {
+        trkpts[i].children.add(
+          XmlElement(XmlName('ele'), [], [
+            XmlText(elevations[i].toStringAsFixed(1)),
+          ]),
+        );
+      }
+
+      return doc.toXmlString(pretty: true);
+    } catch (_) {
+      return content;
     }
   }
 

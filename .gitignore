@@ -58,3 +58,4 @@ app_icon_1024.png
 # Sample data files
 *.json
 !pubspec.json
+*.gpx
