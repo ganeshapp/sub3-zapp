@@ -242,12 +242,13 @@ class FtmsService {
     await _writeControlPoint([0x02, lo, hi]);
   }
 
-  /// Set target inclination. Direct 1:1 mapping from percentage to level,
-  /// clamped to the treadmill's 0-18 range.
+  /// Set target inclination in percent, clamped to 0-18%.
+  /// FTMS Control Point opcode 0x03 takes a sint16 in 0.1% units.
   Future<void> setTargetIncline(double pct) async {
-    final level = clampInclineToLevel(pct);
-    final lo = level & 0xFF;
-    final hi = (level >> 8) & 0xFF;
+    final clamped = pct.clamp(0.0, 18.0);
+    final raw = (clamped * 10).round(); // 1% → 10, 5% → 50
+    final lo = raw & 0xFF;
+    final hi = (raw >> 8) & 0xFF;
     await _writeControlPoint([0x03, lo, hi]);
   }
 
