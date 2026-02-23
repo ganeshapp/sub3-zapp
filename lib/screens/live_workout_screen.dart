@@ -129,6 +129,15 @@ class _DashboardViewState extends ConsumerState<_DashboardView> {
             workoutFile: workout.workoutFile,
             progress: workout.progress,
           ),
+
+          // Distance progress bar for GPX routes
+          if (workout.workoutFile.isGpx) ...[
+            const SizedBox(height: 8),
+            _DistanceProgressBar(
+              currentKm: workout.totalDistanceKm,
+              totalKm: workout.workoutFile.totalDistanceM / 1000,
+            ),
+          ],
           const SizedBox(height: 12),
 
           // Metric tiles — 3×3 grid
@@ -359,6 +368,75 @@ class _DashboardViewState extends ConsumerState<_DashboardView> {
     final m = minPerKm.floor();
     final s = ((minPerKm - m) * 60).round();
     return '$m:${s.toString().padLeft(2, '0')}';
+  }
+}
+
+// ── Distance progress bar (GPX only) ──
+
+class _DistanceProgressBar extends StatelessWidget {
+  final double currentKm;
+  final double totalKm;
+
+  const _DistanceProgressBar({
+    required this.currentKm,
+    required this.totalKm,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final remaining = (totalKm - currentKm).clamp(0.0, totalKm);
+    final fraction = totalKm > 0 ? (currentKm / totalKm).clamp(0.0, 1.0) : 0.0;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E1E1E),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                '${currentKm.toStringAsFixed(2)} km',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.red,
+                ),
+              ),
+              Text(
+                '${remaining.toStringAsFixed(2)} km left',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white54,
+                ),
+              ),
+              Text(
+                '${totalKm.toStringAsFixed(2)} km',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white38,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: fraction,
+              minHeight: 6,
+              backgroundColor: Colors.white.withValues(alpha: 0.08),
+              valueColor: const AlwaysStoppedAnimation<Color>(Colors.red),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

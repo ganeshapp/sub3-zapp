@@ -33,3 +33,15 @@ final monthlySessionsProvider = Provider<List<WorkoutSession>>((ref) {
   final monthStart = DateTime(now.year, now.month);
   return sessions.where((s) => s.date.isAfter(monthStart)).toList();
 });
+
+/// Derived: sessions from the current calendar year.
+final yearlySessionsProvider = Provider<List<WorkoutSession>>((ref) {
+  final sessions = ref.watch(statsProvider).valueOrNull ?? [];
+  final yearStart = DateTime(DateTime.now().year);
+  return sessions.where((s) => s.date.isAfter(yearStart)).toList();
+});
+
+/// Derived: all sessions ever (lifetime).
+final lifetimeSessionsProvider = Provider<List<WorkoutSession>>((ref) {
+  return ref.watch(statsProvider).valueOrNull ?? [];
+});

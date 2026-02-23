@@ -15,6 +15,8 @@ class StatsScreen extends ConsumerWidget {
     final sessionsAsync = ref.watch(statsProvider);
     final weeklySessions = ref.watch(weeklySessionsProvider);
     final monthlySessions = ref.watch(monthlySessionsProvider);
+    final yearlySessions = ref.watch(yearlySessionsProvider);
+    final lifetimeSessions = ref.watch(lifetimeSessionsProvider);
 
     return sessionsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -24,8 +26,8 @@ class StatsScreen extends ConsumerWidget {
           onRefresh: () => ref.read(statsProvider.notifier).refresh(),
           child: sessions.isEmpty
               ? _EmptyState(theme: theme)
-              : _buildContent(
-                  context, theme, sessions, weeklySessions, monthlySessions),
+              : _buildContent(context, theme, sessions, weeklySessions,
+                  monthlySessions, yearlySessions, lifetimeSessions),
         );
       },
     );
@@ -37,27 +39,51 @@ class StatsScreen extends ConsumerWidget {
     List<WorkoutSession> sessions,
     List<WorkoutSession> weekly,
     List<WorkoutSession> monthly,
+    List<WorkoutSession> yearly,
+    List<WorkoutSession> lifetime,
   ) {
     return CustomScrollView(
       slivers: [
-        // Volume header
+        // Volume cards -- 2×2 grid
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-            child: Row(
+            child: Column(
               children: [
-                _VolumeCard(
-                  label: 'This Week',
-                  distance: _totalDistance(weekly),
-                  duration: _totalDuration(weekly),
-                  icon: Icons.calendar_today,
+                Row(
+                  children: [
+                    _VolumeCard(
+                      label: 'This Week',
+                      distance: _totalDistance(weekly),
+                      duration: _totalDuration(weekly),
+                      icon: Icons.calendar_today,
+                    ),
+                    const SizedBox(width: 12),
+                    _VolumeCard(
+                      label: 'This Month',
+                      distance: _totalDistance(monthly),
+                      duration: _totalDuration(monthly),
+                      icon: Icons.date_range,
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                _VolumeCard(
-                  label: 'This Month',
-                  distance: _totalDistance(monthly),
-                  duration: _totalDuration(monthly),
-                  icon: Icons.date_range,
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    _VolumeCard(
+                      label: 'This Year',
+                      distance: _totalDistance(yearly),
+                      duration: _totalDuration(yearly),
+                      icon: Icons.event_note,
+                    ),
+                    const SizedBox(width: 12),
+                    _VolumeCard(
+                      label: 'Lifetime',
+                      distance: _totalDistance(lifetime),
+                      duration: _totalDuration(lifetime),
+                      icon: Icons.all_inclusive,
+                    ),
+                  ],
                 ),
               ],
             ),
