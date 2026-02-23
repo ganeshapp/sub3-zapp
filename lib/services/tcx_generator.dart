@@ -64,6 +64,10 @@ class TcxGenerator {
             '              <LongitudeDegrees>${tp.longitude!.toStringAsFixed(7)}</LongitudeDegrees>');
         buf.writeln('            </Position>');
       }
+      if (tp.altitude != null) {
+        buf.writeln(
+            '            <AltitudeMeters>${tp.altitude!.toStringAsFixed(1)}</AltitudeMeters>');
+      }
       buf.writeln(
           '            <DistanceMeters>${distM.toStringAsFixed(1)}</DistanceMeters>');
 

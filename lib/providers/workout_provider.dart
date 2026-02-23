@@ -120,12 +120,14 @@ class ActiveWorkoutState {
         .reduce((a, b) => a > b ? a : b);
   }
 
-  /// Elevation gain computed from telemetry incline deltas (rough estimate).
+  /// Elevation gain in meters, computed from cumulative altitude changes.
   double get elevationGain {
     double gain = 0;
     for (var i = 1; i < telemetry.length; i++) {
-      final dEle = telemetry[i].inclinePct - telemetry[i - 1].inclinePct;
-      if (dEle > 0) gain += dEle;
+      final prev = telemetry[i - 1].altitude ?? 0;
+      final curr = telemetry[i].altitude ?? 0;
+      final delta = curr - prev;
+      if (delta > 0) gain += delta;
     }
     return gain;
   }
@@ -222,15 +224,25 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
     // Current pace: min/km = 60 / speed  (guard div-by-zero)
     final currentPace = speedKmh > 0 ? 60.0 / speedKmh : 0.0;
 
-    // Interpolate virtual GPS position for GPX routes
+    // Interpolate virtual GPS position and elevation for GPX routes
     double? lat;
     double? lon;
+    double? altitude;
     if (s.workoutFile.isGpx) {
-      final pos = s.workoutFile.interpolatePosition(totalDist * 1000);
+      final distM = totalDist * 1000;
+      final pos = s.workoutFile.interpolatePosition(distM);
       if (pos != null) {
         lat = pos.$1;
         lon = pos.$2;
       }
+      altitude = s.workoutFile.interpolateElevation(distM);
+    } else {
+      // JSON workouts: compute virtual altitude from incline and distance
+      final prevAlt = s.telemetry.isNotEmpty
+          ? (s.telemetry.last.altitude ?? 0.0)
+          : 0.0;
+      final horizDistM = distDelta * 1000;
+      altitude = prevAlt + horizDistM * (incline / 100);
     }
 
     // Running averages from telemetry
@@ -245,6 +257,7 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
         paceMinPerKm: currentPace,
         latitude: lat,
         longitude: lon,
+        altitude: altitude,
       ));
 
     final n = newTelemetry.length;
