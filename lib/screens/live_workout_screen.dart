@@ -1,5 +1,9 @@
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:gal/gal.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../providers/workout_provider.dart';
 import '../widgets/workout_visualizer.dart';
@@ -85,13 +89,26 @@ class _DashboardView extends ConsumerStatefulWidget {
 
 class _DashboardViewState extends ConsumerState<_DashboardView> {
   bool _confirmingStop = false;
+  final _screenshotKey = GlobalKey();
+  final _capturedMarks = <int>{};
 
   @override
   Widget build(BuildContext context) {
     final workout = widget.workout;
     final isPaused = workout.phase == WorkoutPhase.paused;
 
-    return GestureDetector(
+    // Auto-screenshot every 10 minutes (600 seconds)
+    if (workout.phase == WorkoutPhase.running) {
+      final mark = workout.elapsedSeconds ~/ 600;
+      if (mark > 0 && !_capturedMarks.contains(mark)) {
+        _capturedMarks.add(mark);
+        WidgetsBinding.instance.addPostFrameCallback((_) => _takeScreenshot());
+      }
+    }
+
+    return RepaintBoundary(
+      key: _screenshotKey,
+      child: GestureDetector(
       onTap: _confirmingStop ? () => setState(() => _confirmingStop = false) : null,
       behavior: HitTestBehavior.translucent,
       child: Padding(
@@ -350,7 +367,30 @@ class _DashboardViewState extends ConsumerState<_DashboardView> {
         ],
       ),
     ),
+    ),
     );
+  }
+
+  Future<void> _takeScreenshot() async {
+    try {
+      final hasAccess = await Gal.hasAccess(toAlbum: true);
+      if (!hasAccess) {
+        final granted = await Gal.requestAccess(toAlbum: true);
+        if (!granted) return;
+      }
+
+      final boundary = _screenshotKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
+      if (boundary == null) return;
+
+      final image = await boundary.toImage(pixelRatio: 2.0);
+      final byteData =
+          await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) return;
+
+      final Uint8List bytes = byteData.buffer.asUint8List();
+      await Gal.putImageBytes(bytes, album: 'Sub3');
+    } catch (_) {}
   }
 
   String _fmtDuration(int totalSeconds) {
