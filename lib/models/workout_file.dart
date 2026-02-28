@@ -4,15 +4,28 @@ import 'dart:math';
 class WorkoutInterval {
   final int durationSeconds;
   final double speedKmh;
+  final double endSpeedKmh;
   final double inclinePct;
+  final double endInclinePct;
   final String type;
 
   const WorkoutInterval({
     required this.durationSeconds,
     required this.speedKmh,
+    double? endSpeedKmh,
     required this.inclinePct,
+    double? endInclinePct,
     this.type = 'active',
-  });
+  })  : endSpeedKmh = endSpeedKmh ?? speedKmh,
+        endInclinePct = endInclinePct ?? inclinePct;
+
+  /// Linearly interpolate speed at a given fraction (0.0 = start, 1.0 = end).
+  double speedAt(double t) =>
+      speedKmh + (endSpeedKmh - speedKmh) * t.clamp(0.0, 1.0);
+
+  /// Linearly interpolate incline at a given fraction.
+  double inclineAt(double t) =>
+      inclinePct + (endInclinePct - inclinePct) * t.clamp(0.0, 1.0);
 }
 
 /// A single point along a GPX route.

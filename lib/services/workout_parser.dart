@@ -51,21 +51,28 @@ class WorkoutParser {
     final displayName = extractDisplayName(name, content);
 
     final intervals = rawIntervals.map((block) {
+      final startSpeed = (block['speed'] as num?)?.toDouble() ??
+          (block['speed_kmh'] as num?)?.toDouble() ??
+          (block['start_speed_kmh'] as num?)?.toDouble() ??
+          (block['pace'] as num?)?.toDouble() ??
+          0.0;
+      final endSpeed = (block['end_speed_kmh'] as num?)?.toDouble();
+      final startIncline = (block['incline'] as num?)?.toDouble() ??
+          (block['incline_pct'] as num?)?.toDouble() ??
+          (block['start_incline_pct'] as num?)?.toDouble() ??
+          (block['gradient'] as num?)?.toDouble() ??
+          0.0;
+      final endIncline = (block['end_incline_pct'] as num?)?.toDouble();
+
       return WorkoutInterval(
         durationSeconds: (block['duration'] as num?)?.toInt() ??
             (block['duration_seconds'] as num?)?.toInt() ??
             (block['time'] as num?)?.toInt() ??
             0,
-        speedKmh: (block['speed'] as num?)?.toDouble() ??
-            (block['speed_kmh'] as num?)?.toDouble() ??
-            (block['start_speed_kmh'] as num?)?.toDouble() ??
-            (block['pace'] as num?)?.toDouble() ??
-            0.0,
-        inclinePct: (block['incline'] as num?)?.toDouble() ??
-            (block['incline_pct'] as num?)?.toDouble() ??
-            (block['start_incline_pct'] as num?)?.toDouble() ??
-            (block['gradient'] as num?)?.toDouble() ??
-            0.0,
+        speedKmh: startSpeed,
+        endSpeedKmh: endSpeed,
+        inclinePct: startIncline,
+        endInclinePct: endIncline,
         type: (block['type'] as String?) ?? 'active',
       );
     }).where((i) => i.durationSeconds > 0).toList();
