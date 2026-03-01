@@ -137,21 +137,44 @@ class ActiveWorkoutState {
 
 class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
   Timer? _timer;
+
+  // Physical stop detection
   int _zeroSpeedTicks = 0;
   bool _beltHasMoved = false;
+
+  // JSON command tracking -- commands sent ONLY when target changes
+  double _lastSentSpeed = -1;
+  double _lastSentIncline = -1;
+
+  // Physical control detection -- if the treadmill is decelerating while
+  // below our commanded target, the user is using physical controls.
+  // Once detected, ALL speed/incline commands are suspended until the
+  // next interval transition or an explicit toggle back to auto.
+  bool _commandsSuspended = false;
+  double _prevReportedSpeed = 0;
+  int _decelerationTicks = 0;
+
+  // GPX incline tracking
+  double _lastSentGpxIncline = -1;
 
   @override
   ActiveWorkoutState? build() => null;
 
+  void _resetCommandState() {
+    _lastSentSpeed = -1;
+    _lastSentIncline = -1;
+    _commandsSuspended = false;
+    _prevReportedSpeed = 0;
+    _decelerationTicks = 0;
+    _lastSentGpxIncline = -1;
+    _zeroSpeedTicks = 0;
+    _beltHasMoved = false;
+  }
+
   // ── Lifecycle ──
 
   Future<void> startWorkout(WorkoutFile file) async {
-    _zeroSpeedTicks = 0;
-    _beltHasMoved = false;
-    _lastSentSpeed = -1;
-    _lastSentIncline = -1;
-    _commandResendCounter = 0;
-    _lastSentGpxIncline = -1;
+    _resetCommandState();
     WakelockPlus.enable();
     BleService.instance.enableAutoReconnect();
 
@@ -205,7 +228,7 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
   Future<void> _sendInitialCommands() async {
     try {
       await FtmsService.instance.startOrResume();
-      _sendSegmentCommands();
+      await _sendSegmentCommands(isTransition: true);
     } catch (_) {}
   }
 
@@ -221,11 +244,11 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
     final cadence = hr.cadence ?? s.currentCadence;
     final elapsed = s.elapsedSeconds + 1;
 
-    // Distance: speed (km/h) × 1 second = speed / 3600 km
+    // Distance: speed (km/h) x 1 second = speed / 3600 km
     final distDelta = speedKmh / 3600;
     final totalDist = s.totalDistanceKm + distDelta;
 
-    // Current pace: min/km = 60 / speed  (guard div-by-zero)
+    // Current pace: min/km = 60 / speed (guard div-by-zero)
     final currentPace = speedKmh > 0 ? 60.0 / speedKmh : 0.0;
 
     // Interpolate virtual GPS position and elevation for GPX routes
@@ -241,7 +264,6 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
       }
       altitude = s.workoutFile.interpolateElevation(distM);
     } else {
-      // JSON workouts: compute virtual altitude from incline and distance
       final prevAlt = s.telemetry.isNotEmpty
           ? (s.telemetry.last.altitude ?? 0.0)
           : 0.0;
@@ -280,27 +302,58 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
     if (!s.workoutFile.isGpx && s.workoutFile.intervals != null) {
       final intervals = s.workoutFile.intervals!;
 
-      // Check total workout duration first as a safeguard
+      // Total duration safeguard
       final totalDuration = s.workoutFile.totalDurationSeconds;
       if (totalDuration > 0 && elapsed >= totalDuration) {
         _finishWorkout();
         return;
       }
 
-      // Advance past completed intervals (handles edge cases safely)
+      // Detect physical treadmill control: rapid deceleration while the
+      // treadmill speed is already below our commanded target means the
+      // user pressed stop/pause on the physical machine. A normal
+      // commanded deceleration (e.g. 15 -> 6 transition) shows speed
+      // ABOVE the new target while ramping down, not below it.
+      if (!_commandsSuspended && segIdx < intervals.length) {
+        final block = intervals[segIdx];
+        final t = block.durationSeconds > 0
+            ? (segElapsed / block.durationSeconds).clamp(0.0, 1.0)
+            : 0.0;
+        final targetSpeed = block.speedAt(t);
+        if (speedKmh < _prevReportedSpeed - 0.3 &&
+            speedKmh < targetSpeed - 1.0) {
+          _decelerationTicks++;
+          if (_decelerationTicks >= 2) {
+            _commandsSuspended = true;
+          }
+        } else {
+          _decelerationTicks = 0;
+        }
+      }
+      _prevReportedSpeed = speedKmh;
+
+      // Advance past completed intervals
+      var transitioned = false;
       if (segIdx < intervals.length &&
           intervals[segIdx].durationSeconds > 0 &&
           segElapsed >= intervals[segIdx].durationSeconds) {
         segIdx++;
         segElapsed = 0;
+        transitioned = true;
         _lastSentSpeed = -1;
         _lastSentIncline = -1;
-        _commandResendCounter = 0;
+        _commandsSuspended = false;
+        _decelerationTicks = 0;
       }
 
-      // Send interpolated commands every tick (method self-throttles)
-      if (!s.isManualControlEnabled) {
-        _sendSegmentCommands(segmentIndex: segIdx, segElapsed: segElapsed);
+      // Send commands only when target changes (ramp progression or
+      // transition). Never re-send the same value as a keep-alive.
+      if (!s.isManualControlEnabled && !_commandsSuspended) {
+        _sendSegmentCommands(
+          segmentIndex: segIdx,
+          segElapsed: segElapsed,
+          isTransition: transitioned,
+        );
       }
     }
 
@@ -316,9 +369,8 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
       _sendGpxIncline(totalDist, s.workoutFile);
     }
 
-    // Detect treadmill physical stop: if belt was moving at running speed
-    // but speed drops below 1 km/h for 3 consecutive seconds, auto-finish.
-    // Threshold of 1.0 km/h catches deceleration better than 0.1.
+    // Physical stop detection: belt was running but speed dropped to
+    // near-zero. Use generous thresholds to catch deceleration.
     if (speedKmh > 2.0) {
       _beltHasMoved = true;
       _zeroSpeedTicks = 0;
@@ -349,17 +401,17 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
 
   // ── Execution engine: JSON ──
 
-  double _lastSentSpeed = -1;
-  double _lastSentIncline = -1;
-  int _commandResendCounter = 0;
-
-  /// Send interpolated speed/incline for the current interval.
-  /// Re-sends every 5 seconds as a keep-alive, or immediately when
-  /// the target value changes (interval transition or ramp progression).
-  Future<void> _sendSegmentCommands({int? segmentIndex, int? segElapsed}) async {
+  /// Send speed/incline ONLY when the interpolated target actually changes.
+  /// On interval transitions, retry once after a brief gap for BLE
+  /// reliability -- this is a one-shot, not a continuous loop.
+  Future<void> _sendSegmentCommands({
+    int? segmentIndex,
+    int? segElapsed,
+    bool isTransition = false,
+  }) async {
     final s = state;
     if (s == null || s.workoutFile.isGpx) return;
-    if (s.isManualControlEnabled) return;
+    if (s.isManualControlEnabled || _commandsSuspended) return;
     final intervals = s.workoutFile.intervals;
     if (intervals == null) return;
 
@@ -375,30 +427,28 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
     final targetSpeed = block.speedAt(t);
     final targetIncline = block.inclineAt(t);
 
-    // Round to 1 decimal to avoid excessive BLE chatter
     final roundedSpeed = (targetSpeed * 10).round() / 10;
     final roundedIncline = (targetIncline * 10).round() / 10;
 
-    _commandResendCounter++;
     final valueChanged = roundedSpeed != _lastSentSpeed ||
         roundedIncline != _lastSentIncline;
-    final resendDue = _commandResendCounter >= 5;
-
-    if (!valueChanged && !resendDue) return;
+    if (!valueChanged) return;
 
     _lastSentSpeed = roundedSpeed;
     _lastSentIncline = roundedIncline;
-    _commandResendCounter = 0;
 
     try {
       await FtmsService.instance.setTargetSpeed(roundedSpeed);
       await FtmsService.instance.setTargetIncline(roundedIncline);
+      if (isTransition) {
+        await Future.delayed(const Duration(milliseconds: 300));
+        await FtmsService.instance.setTargetSpeed(roundedSpeed);
+        await FtmsService.instance.setTargetIncline(roundedIncline);
+      }
     } catch (_) {}
   }
 
   // ── Execution engine: GPX (incline only, speed is manual) ──
-
-  double _lastSentGpxIncline = -1;
 
   Future<void> _sendGpxIncline(double distKm, WorkoutFile file) async {
     final points = file.gpxPoints;
@@ -407,24 +457,21 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
 
     final distM = distKm * 1000;
 
-    // Look-ahead: target ~30m ahead (≈3s at 10 km/h) for motor lag
+    // Look-ahead ~30m (approx 3s at 10 km/h) for motor lag
     const lookAheadM = 30.0;
     final targetDistM = distM + lookAheadM;
 
-    // Find the two bracketing points
     int i = 0;
     for (; i < points.length - 1; i++) {
       if (points[i + 1].cumulativeDistanceM >= targetDistM) break;
     }
     final next = min(i + 1, points.length - 1);
 
-    // Compute grade between current and next point
     final dDist = points[next].cumulativeDistanceM -
         points[i].cumulativeDistanceM;
     final dEle = smoothed[next] - smoothed[i];
     final gradePct = dDist > 0 ? (dEle / dDist) * 100 : 0.0;
 
-    // Only send if the level changed
     final level = FtmsService.clampInclineToLevel(gradePct);
     if (level.toDouble() != _lastSentGpxIncline) {
       _lastSentGpxIncline = level.toDouble();
@@ -436,8 +483,6 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
 
   // ── Controls ──
 
-  /// Toggle manual control. When switching back to auto, immediately
-  /// re-send the current segment's target speed and incline.
   Future<void> toggleManualControl() async {
     final s = state;
     if (s == null || s.phase != WorkoutPhase.running) return;
@@ -446,10 +491,10 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
     state = s.copyWith(isManualControlEnabled: !wasManual);
 
     if (wasManual) {
-      // Returning to auto: force immediate re-send
       _lastSentSpeed = -1;
       _lastSentIncline = -1;
-      _commandResendCounter = 0;
+      _commandsSuspended = false;
+      _decelerationTicks = 0;
       if (!s.workoutFile.isGpx) {
         _sendSegmentCommands();
       } else {
@@ -473,10 +518,11 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
     WakelockPlus.enable();
     _lastSentSpeed = -1;
     _lastSentIncline = -1;
-    _commandResendCounter = 0;
+    _commandsSuspended = false;
+    _decelerationTicks = 0;
     try {
       await FtmsService.instance.startOrResume();
-      _sendSegmentCommands();
+      await _sendSegmentCommands(isTransition: true);
     } catch (_) {}
     state = state!.copyWith(phase: WorkoutPhase.running);
   }
@@ -497,16 +543,10 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
     state = state?.copyWith(phase: WorkoutPhase.finished);
   }
 
-  /// Completely clear the workout state (called after summary screen).
   void clear() {
     _timer?.cancel();
     _timer = null;
-    _zeroSpeedTicks = 0;
-    _beltHasMoved = false;
-    _lastSentSpeed = -1;
-    _lastSentIncline = -1;
-    _commandResendCounter = 0;
-    _lastSentGpxIncline = -1;
+    _resetCommandState();
     WakelockPlus.disable();
     state = null;
   }
