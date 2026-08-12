@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../models/ghost_trace.dart';
+import '../models/library_item.dart';
 import '../models/workout_session.dart';
+import '../providers/library_provider.dart';
 import '../providers/workout_provider.dart';
 import '../providers/stats_provider.dart';
 import '../services/database_service.dart';
-import '../services/strava_service.dart';
 import '../services/tcx_file_manager.dart';
 import '../services/tcx_generator.dart';
+import '../widgets/metric_info.dart';
 
 class PostWorkoutScreen extends ConsumerStatefulWidget {
   const PostWorkoutScreen({super.key});
@@ -17,9 +20,18 @@ class PostWorkoutScreen extends ConsumerStatefulWidget {
 }
 
 class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
-  bool _uploading = false;
-  bool _uploaded = false;
+  bool _exporting = false;
   int? _savedSessionId;
+
+  /// In-flight save, memoized so concurrent callers (Save & Exit tapped while
+  /// an export is still saving) await the SAME insert instead of both passing
+  /// the `_savedSessionId == null` check.
+  Future<int?>? _saveFuture;
+
+  /// Pre-run library-item snapshot taken before recordCompletion, so
+  /// Discard can revert the badge / best-time bump.
+  LibraryItem? _completionBackup;
+  LibraryItemType? _completionType;
 
   @override
   Widget build(BuildContext context) {
@@ -68,7 +80,10 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
                       mainAxisSpacing: 10,
                       crossAxisSpacing: 10,
                       childAspectRatio: 1.65,
-                      physics: const NeverScrollableScrollPhysics(),
+                      // Scrollable: 4 rows of tiles do not fit a 375×667
+                      // phone, and the last two (Elev. Gain, Data Points)
+                      // would otherwise be unreachable — including their
+                      // metric-help dialog.
                       children: [
                         _SummaryTile(
                           icon: Icons.timer,
@@ -86,11 +101,13 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
                           label: 'Avg Speed',
                           value:
                               '${workout.avgSpeedKmh.toStringAsFixed(1)} km/h',
+                          infoKey: MetricInfo.avgSpeed,
                         ),
                         _SummaryTile(
                           icon: Icons.directions_run,
                           label: 'Avg Pace',
                           value: _fmtPace(workout.avgPaceMinPerKm),
+                          infoKey: MetricInfo.avgPace,
                         ),
                         _SummaryTile(
                           icon: Icons.favorite,
@@ -98,6 +115,7 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
                           value: workout.avgHr > 0
                               ? '${workout.avgHr.round()} bpm'
                               : '--',
+                          infoKey: MetricInfo.heartRate,
                         ),
                         _SummaryTile(
                           icon: Icons.favorite_border,
@@ -105,12 +123,14 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
                           value: workout.maxHr > 0
                               ? '${workout.maxHr.round()} bpm'
                               : '--',
+                          infoKey: MetricInfo.heartRate,
                         ),
                         _SummaryTile(
                           icon: Icons.landscape,
                           label: 'Elev. Gain',
                           value:
                               '${workout.elevationGain.toStringAsFixed(0)} m',
+                          infoKey: MetricInfo.elevationGain,
                         ),
                         _SummaryTile(
                           icon: Icons.timeline,
@@ -124,28 +144,47 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
                   // Action buttons
                   Column(
                     children: [
-                      // Upload to Strava
-                      SizedBox(
-                        width: double.infinity,
-                        height: 48,
-                        child: FilledButton.icon(
-                          onPressed: _uploaded
-                              ? null
-                              : () => _uploadToStrava(workout),
-                          icon: _uploaded
-                              ? const Icon(Icons.check, size: 20)
-                              : const Icon(Icons.upload, size: 20),
-                          label: Text(_uploaded
-                              ? 'Uploaded to Strava'
-                              : 'Upload to Strava'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor:
-                                _uploaded ? Colors.green : Colors.deepOrange,
-                            disabledBackgroundColor: Colors.green.shade800,
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(12)),
+                      // Export row: save the TCX where the user can find it
+                      Row(
+                        children: [
+                          Expanded(
+                            flex: 2,
+                            child: SizedBox(
+                              height: 48,
+                              child: FilledButton.icon(
+                                onPressed: () => _saveTcx(workout),
+                                icon: const Icon(Icons.download, size: 20),
+                                label: Text(
+                                  TcxFileManager.supportsDownloads
+                                      ? 'Save TCX to Downloads'
+                                      : 'Save TCX',
+                                ),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: Colors.blueGrey.shade600,
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: SizedBox(
+                              height: 48,
+                              child: OutlinedButton.icon(
+                                onPressed: () => _shareTcx(workout),
+                                icon: const Icon(Icons.ios_share, size: 18),
+                                label: const Text('Share'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.white70,
+                                  side: const BorderSide(color: Colors.white24),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 10),
                       // Save & Discard row
@@ -194,8 +233,8 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
             ),
           ),
 
-          // Loading overlay during Strava upload
-          if (_uploading)
+          // Loading overlay while the TCX is written / shared
+          if (_exporting)
             Container(
               color: Colors.black.withValues(alpha: 0.7),
               child: Center(
@@ -205,7 +244,7 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
                     const CircularProgressIndicator(color: Colors.deepOrange),
                     const SizedBox(height: 20),
                     Text(
-                      'Uploading to Strava...',
+                      'Preparing TCX file...',
                       style: GoogleFonts.inter(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
@@ -225,7 +264,15 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
 
   Future<void> _saveAndExit(
       BuildContext context, ActiveWorkoutState w) async {
-    final sessionId = await _ensureSaved(w);
+    final int? sessionId;
+    try {
+      sessionId = await _ensureSaved(w);
+    } catch (e) {
+      // Without this the button would silently do nothing, and the screen
+      // has no way out other than Discard.
+      _snack('Save failed: $e', Colors.red.shade700);
+      return;
+    }
     if (sessionId == null) return;
     ref.read(activeWorkoutProvider.notifier).clear();
     if (context.mounted) {
@@ -234,12 +281,22 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
   }
 
   /// Saves the session + TCX file once, caches the ID for subsequent operations.
-  Future<int?> _ensureSaved(ActiveWorkoutState w) async {
-    if (_savedSessionId != null) return _savedSessionId;
+  /// A failed save clears the memo so the next tap genuinely retries the
+  /// insert instead of replaying the cached error forever.
+  Future<int?> _ensureSaved(ActiveWorkoutState w) {
+    if (_savedSessionId != null) return Future.value(_savedSessionId);
+    return _saveFuture ??= _save(w).catchError((Object e, StackTrace st) {
+      _saveFuture = null;
+      return Future<int?>.error(e, st);
+    });
+  }
+
+  Future<int?> _save(ActiveWorkoutState w) async {
     final now = DateTime.now();
     final session = WorkoutSession(
       date: now,
       fileName: w.workoutFile.name,
+      displayName: w.workoutFile.displayName,
       type: w.workoutFile.isGpx ? 'gpx' : 'workout',
       durationSeconds: w.elapsedSeconds,
       distanceKm: w.totalDistanceKm,
@@ -262,77 +319,128 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
       await TcxFileManager.save(_savedSessionId!, tcx);
     }
 
+    // Completion tracking: only a genuinely finished route (≥99% of the
+    // distance) or a structured workout that ran to the end earns the badge.
+    // Snapshot the library row first so Discard can revert the bump.
+    if (w.earnedCompletion) {
+      final type =
+          w.workoutFile.isGpx ? LibraryItemType.gpx : LibraryItemType.workout;
+      _completionBackup =
+          await DatabaseService.getLibraryItemByName(w.workoutFile.name);
+      _completionType = type;
+      await DatabaseService.recordCompletion(
+        fileName: w.workoutFile.name,
+        type: type,
+        elapsedSeconds: w.elapsedSeconds,
+        routeCompleted: w.routeCompleted,
+        prTrace: _buildPrTrace(w),
+      );
+      await _reloadLibrary(type);
+    }
+
     // Refresh the stats screen provider
     ref.invalidate(statsProvider);
 
     return _savedSessionId;
   }
 
-  Future<void> _uploadToStrava(ActiveWorkoutState w) async {
-    final linked = await StravaService.isLinked;
-    if (!linked) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Link your Strava account in Settings first.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-      return;
+  /// The ghost future runs race against: cumulative metres, one sample per
+  /// second, from a route that was actually finished. The database keeps it
+  /// only if this run turns out to be the new best.
+  String? _buildPrTrace(ActiveWorkoutState w) {
+    if (!w.routeCompleted) return null;
+    final metres = <double>[
+      0,
+      ...w.telemetry.map((t) => t.cumulativeDistanceKm * 1000),
+    ];
+    return GhostTrace.fromDistances(metres)?.toJson();
+  }
+
+  Future<void> _reloadLibrary(LibraryItemType type) async {
+    if (type == LibraryItemType.workout) {
+      await ref.read(workoutsProvider.notifier).reloadFromCache();
+    } else {
+      await ref.read(virtualRunsProvider.notifier).reloadFromCache();
     }
+  }
 
-    setState(() => _uploading = true);
+  /// Export name: `Sub3_<display name>_<yyyy-MM-dd>`.
+  String _exportName(ActiveWorkoutState w) {
+    final now = DateTime.now();
+    final datePart = '${now.year}-${now.month.toString().padLeft(2, '0')}-'
+        '${now.day.toString().padLeft(2, '0')}';
+    return 'Sub3_${w.workoutFile.displayName}_$datePart';
+  }
 
+  Future<void> _saveTcx(ActiveWorkoutState w) async {
+    if (_exporting) return;
+    if (_nothingToExport(w)) return;
+    final origin = _shareOrigin();
+    setState(() => _exporting = true);
     try {
-      // Save session first so we can mark it as uploaded
       final sessionId = await _ensureSaved(w);
+      if (sessionId == null) throw Exception('Could not save this run');
 
-      // Generate TCX from telemetry
-      final startTime =
-          DateTime.now().subtract(Duration(seconds: w.elapsedSeconds));
-      final tcx = TcxGenerator.generate(
-        startTime: startTime,
-        telemetry: w.telemetry,
-        totalDistanceM: w.totalDistanceKm * 1000,
-        totalTimeSeconds: w.elapsedSeconds,
-      );
-
-      await StravaService.uploadTcx(
-        tcxContent: tcx,
-        activityName: 'Sub3 ${w.workoutFile.displayName}',
-      );
-
-      // Mark as uploaded in DB
-      if (sessionId != null) {
-        await DatabaseService.markUploadedToStrava(sessionId);
+      if (!TcxFileManager.supportsDownloads) {
+        // iOS has no Downloads folder — hand it to the share sheet instead.
+        await TcxFileManager.shareTcx(sessionId, _exportName(w),
+            sharePositionOrigin: origin);
+        _snack('Shared — save the TCX from the share sheet.',
+            Colors.green.shade700);
+        return;
       }
 
-      setState(() {
-        _uploading = false;
-        _uploaded = true;
-      });
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Successfully uploaded to Strava!'),
-            backgroundColor: Colors.green.shade700,
-          ),
-        );
-      }
+      final path =
+          await TcxFileManager.exportToDownloads(sessionId, _exportName(w));
+      _snack('Saved to $path', Colors.green.shade700);
     } catch (e) {
-      setState(() => _uploading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Strava upload failed: $e'),
-            backgroundColor: Colors.red.shade700,
-            duration: const Duration(seconds: 5),
-          ),
-        );
-      }
+      _snack('Save failed: $e', Colors.red.shade700);
+    } finally {
+      if (mounted) setState(() => _exporting = false);
     }
+  }
+
+  Future<void> _shareTcx(ActiveWorkoutState w) async {
+    if (_exporting) return;
+    if (_nothingToExport(w)) return;
+    final origin = _shareOrigin();
+    setState(() => _exporting = true);
+    try {
+      final sessionId = await _ensureSaved(w);
+      if (sessionId == null) throw Exception('Could not save this run');
+      await TcxFileManager.shareTcx(sessionId, _exportName(w),
+          sharePositionOrigin: origin);
+    } catch (e) {
+      _snack('Share failed: $e', Colors.red.shade700);
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  /// iPad anchors the share popover to a rectangle; everywhere else this is
+  /// ignored.
+  Rect? _shareOrigin() {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return null;
+    return box.localToGlobal(Offset.zero) & box.size;
+  }
+
+  /// A run with no telemetry has no TCX file to save or share.
+  bool _nothingToExport(ActiveWorkoutState w) {
+    if (w.telemetry.isNotEmpty) return false;
+    _snack('Nothing to export — this run has no data.', Colors.orange.shade800);
+    return true;
+  }
+
+  void _snack(String message, Color background) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: background,
+        duration: const Duration(seconds: 4),
+      ),
+    );
   }
 
   void _discard(BuildContext context) {
@@ -349,10 +457,12 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(ctx);
+              await _undoSave();
+              if (!mounted) return;
               ref.read(activeWorkoutProvider.notifier).clear();
-              Navigator.of(context).popUntil((route) => route.isFirst);
+              Navigator.of(this.context).popUntil((route) => route.isFirst);
             },
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Discard'),
@@ -360,6 +470,35 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
         ],
       ),
     );
+  }
+
+  /// Exporting a TCX saves the session first, so Discard has to undo that:
+  /// remove the row, its TCX file, and the completion badge bump.
+  Future<void> _undoSave() async {
+    if (_savedSessionId == null) return;
+    try {
+      await DatabaseService.deleteSession(_savedSessionId!);
+      await TcxFileManager.delete(_savedSessionId!);
+
+      final backup = _completionBackup;
+      if (backup != null) {
+        await DatabaseService.restoreCompletion(
+          fileName: backup.name,
+          completionCount: backup.completionCount,
+          bestTimeSeconds: backup.bestTimeSeconds,
+          prTrace: backup.prTrace,
+        );
+        if (_completionType != null) await _reloadLibrary(_completionType!);
+      }
+
+      _savedSessionId = null;
+      _saveFuture = null;
+      _completionBackup = null;
+      _completionType = null;
+      ref.invalidate(statsProvider);
+    } catch (_) {
+      // Best-effort cleanup; still leave the post-workout screen.
+    }
   }
 
   // ── Formatters ──
@@ -387,48 +526,66 @@ class _SummaryTile extends StatelessWidget {
   final String label;
   final String value;
 
+  /// Glossary key: when set, the tile shows a `(?)` and tapping anywhere on
+  /// it explains the metric in plain words.
+  final String? infoKey;
+
   const _SummaryTile({
     required this.icon,
     required this.label,
     required this.value,
+    this.infoKey,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF1E1E1E),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 16, color: Colors.white38),
-              const SizedBox(width: 6),
-              Text(label,
-                  style: GoogleFonts.inter(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.white38)),
-            ],
-          ),
-          const SizedBox(height: 6),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(
-              value,
-              style: GoogleFonts.inter(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                color: Colors.white,
+    final hasInfo = MetricInfo.has(infoKey);
+
+    return GestureDetector(
+      onTap: hasInfo ? () => showMetricInfo(context, infoKey) : null,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E1E1E),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 16, color: Colors.white38),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.inter(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.white38)),
+                ),
+                if (hasInfo) ...[
+                  const SizedBox(width: 4),
+                  const MetricInfoCue(),
+                ],
+              ],
+            ),
+            const SizedBox(height: 6),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                value,
+                style: GoogleFonts.inter(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

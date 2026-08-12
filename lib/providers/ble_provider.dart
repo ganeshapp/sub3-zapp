@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/ble_service.dart';
+import '../services/ftms_service.dart';
 
 // ── Adapter state (on/off/unauthorized) ──
 
@@ -19,6 +20,16 @@ final bleScanResultsProvider = StreamProvider<List<ScanResult>>((ref) {
   return FlutterBluePlus.scanResults;
 });
 
+// ── Live heart rate ──
+
+/// The heart rate coming off the paired sensor right now, or null until the
+/// first packet arrives. Fed by the subscription BleService opens when the
+/// sensor connects, so it keeps ticking across navigation and workouts.
+final liveHeartRateProvider = StreamProvider<int?>((ref) {
+  return FtmsService.instance.hrStream
+      .map((reading) => reading.heartRate > 0 ? reading.heartRate : null);
+});
+
 // ── Connected device state ──
 
 class ConnectedDevicesState {
@@ -29,6 +40,12 @@ class ConnectedDevicesState {
   final bool isConnectingTreadmill;
   final bool isConnectingHr;
 
+  /// True while the auto-reconnect engine is bringing a dropped device back.
+  /// The device keeps its slot so the UI can say "Reconnecting..." instead of
+  /// pretending the sensor was never paired.
+  final bool isReconnectingTreadmill;
+  final bool isReconnectingHr;
+
   const ConnectedDevicesState({
     this.treadmill,
     this.hrSensor,
@@ -36,7 +53,14 @@ class ConnectedDevicesState {
     this.hrSensorState = BluetoothConnectionState.disconnected,
     this.isConnectingTreadmill = false,
     this.isConnectingHr = false,
+    this.isReconnectingTreadmill = false,
+    this.isReconnectingHr = false,
   });
+
+  bool get isTreadmillConnected =>
+      treadmill != null && treadmillState == BluetoothConnectionState.connected;
+  bool get isHrConnected =>
+      hrSensor != null && hrSensorState == BluetoothConnectionState.connected;
 
   ConnectedDevicesState copyWith({
     BluetoothDevice? treadmill,
@@ -45,6 +69,8 @@ class ConnectedDevicesState {
     BluetoothConnectionState? hrSensorState,
     bool? isConnectingTreadmill,
     bool? isConnectingHr,
+    bool? isReconnectingTreadmill,
+    bool? isReconnectingHr,
     bool clearTreadmill = false,
     bool clearHrSensor = false,
   }) {
@@ -55,6 +81,9 @@ class ConnectedDevicesState {
       hrSensorState: hrSensorState ?? this.hrSensorState,
       isConnectingTreadmill: isConnectingTreadmill ?? this.isConnectingTreadmill,
       isConnectingHr: isConnectingHr ?? this.isConnectingHr,
+      isReconnectingTreadmill:
+          isReconnectingTreadmill ?? this.isReconnectingTreadmill,
+      isReconnectingHr: isReconnectingHr ?? this.isReconnectingHr,
     );
   }
 }
@@ -64,7 +93,46 @@ class ConnectedDevicesNotifier extends Notifier<ConnectedDevicesState> {
   StreamSubscription? _hrSub;
 
   @override
-  ConnectedDevicesState build() => const ConnectedDevicesState();
+  ConnectedDevicesState build() {
+    BleService.instance.onReconnectingChanged = _handleReconnectingChanged;
+    return const ConnectedDevicesState();
+  }
+
+  void _handleReconnectingChanged(BleDeviceRole role, bool reconnecting) {
+    if (role == BleDeviceRole.treadmill) {
+      if (reconnecting) {
+        state = state.copyWith(isReconnectingTreadmill: true);
+      } else {
+        final back = BleService.instance.treadmill?.isConnected ?? false;
+        state = back
+            ? state.copyWith(
+                isReconnectingTreadmill: false,
+                treadmillState: BluetoothConnectionState.connected,
+              )
+            : state.copyWith(
+                isReconnectingTreadmill: false,
+                clearTreadmill: true,
+                treadmillState: BluetoothConnectionState.disconnected,
+              );
+      }
+    } else {
+      if (reconnecting) {
+        state = state.copyWith(isReconnectingHr: true);
+      } else {
+        final back = BleService.instance.hrSensor?.isConnected ?? false;
+        state = back
+            ? state.copyWith(
+                isReconnectingHr: false,
+                hrSensorState: BluetoothConnectionState.connected,
+              )
+            : state.copyWith(
+                isReconnectingHr: false,
+                clearHrSensor: true,
+                hrSensorState: BluetoothConnectionState.disconnected,
+              );
+      }
+    }
+  }
 
   Future<void> connectDevice(BluetoothDevice device, BleDeviceRole role) async {
     if (role == BleDeviceRole.treadmill) {
@@ -79,10 +147,26 @@ class ConnectedDevicesNotifier extends Notifier<ConnectedDevicesState> {
       if (role == BleDeviceRole.treadmill) {
         _treadmillSub?.cancel();
         _treadmillSub = device.connectionState.listen((connState) {
-          state = state.copyWith(treadmillState: connState);
           if (connState == BluetoothConnectionState.disconnected) {
-            state = state.copyWith(clearTreadmill: true,
-                treadmillState: BluetoothConnectionState.disconnected);
+            if (BleService.instance.willAutoReconnect(role)) {
+              // Keep the slot filled; the reconnect engine is on it and will
+              // clear the flag through onReconnectingChanged.
+              state = state.copyWith(
+                treadmillState: connState,
+                isReconnectingTreadmill: true,
+              );
+            } else {
+              state = state.copyWith(
+                clearTreadmill: true,
+                treadmillState: BluetoothConnectionState.disconnected,
+                isReconnectingTreadmill: false,
+              );
+            }
+          } else {
+            state = state.copyWith(
+              treadmillState: connState,
+              isReconnectingTreadmill: false,
+            );
           }
         });
         state = state.copyWith(
@@ -93,10 +177,24 @@ class ConnectedDevicesNotifier extends Notifier<ConnectedDevicesState> {
       } else {
         _hrSub?.cancel();
         _hrSub = device.connectionState.listen((connState) {
-          state = state.copyWith(hrSensorState: connState);
           if (connState == BluetoothConnectionState.disconnected) {
-            state = state.copyWith(clearHrSensor: true,
-                hrSensorState: BluetoothConnectionState.disconnected);
+            if (BleService.instance.willAutoReconnect(role)) {
+              state = state.copyWith(
+                hrSensorState: connState,
+                isReconnectingHr: true,
+              );
+            } else {
+              state = state.copyWith(
+                clearHrSensor: true,
+                hrSensorState: BluetoothConnectionState.disconnected,
+                isReconnectingHr: false,
+              );
+            }
+          } else {
+            state = state.copyWith(
+              hrSensorState: connState,
+              isReconnectingHr: false,
+            );
           }
         });
         state = state.copyWith(
@@ -123,6 +221,7 @@ class ConnectedDevicesNotifier extends Notifier<ConnectedDevicesState> {
       state = state.copyWith(
         clearTreadmill: true,
         treadmillState: BluetoothConnectionState.disconnected,
+        isReconnectingTreadmill: false,
       );
     } else {
       _hrSub?.cancel();
@@ -130,6 +229,7 @@ class ConnectedDevicesNotifier extends Notifier<ConnectedDevicesState> {
       state = state.copyWith(
         clearHrSensor: true,
         hrSensorState: BluetoothConnectionState.disconnected,
+        isReconnectingHr: false,
       );
     }
   }

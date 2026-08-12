@@ -1,9 +1,43 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sub3/models/library_item.dart';
 import 'package:sub3/models/telemetry.dart';
+import 'package:sub3/models/workout_file.dart';
 import 'package:sub3/models/workout_session.dart';
+import 'package:sub3/providers/workout_provider.dart';
+import 'package:sub3/services/tcx_file_manager.dart';
 import 'package:sub3/services/tcx_generator.dart';
 import 'package:sub3/services/ftms_service.dart';
+
+/// A GPX route of [distanceM] metres along a straight line.
+WorkoutFile routeFile(double distanceM) {
+  return WorkoutFile(
+    name: 'route1152412195.gpx',
+    displayName: 'Hillview (Rail Corridor) to Holland V',
+    isGpx: true,
+    gpxPoints: [
+      const GpxPoint(lat: 1.0, lon: 103.0, elevation: 10, cumulativeDistanceM: 0),
+      GpxPoint(
+          lat: 1.01, lon: 103.0, elevation: 20, cumulativeDistanceM: distanceM),
+    ],
+    smoothedElevations: const [10, 20],
+  );
+}
+
+/// A structured workout of [durationSeconds] seconds.
+WorkoutFile workoutFile(int durationSeconds) {
+  return WorkoutFile(
+    name: 'tempo_5k.json',
+    displayName: 'Tempo 5K',
+    isGpx: false,
+    intervals: [
+      WorkoutInterval(
+        durationSeconds: durationSeconds,
+        speedKmh: 12,
+        inclinePct: 1,
+      ),
+    ],
+  );
+}
 
 void main() {
   group('LibraryItem', () {
@@ -34,18 +68,113 @@ void main() {
       final session = WorkoutSession(
         date: DateTime(2026, 2, 21),
         fileName: 'marathon_hills.gpx',
+        displayName: 'Marathon Hills',
         type: 'gpx',
         durationSeconds: 3600,
         distanceKm: 10.5,
         avgHr: 155,
         avgSpeed: 10.5,
-        isUploadedToStrava: true,
       );
       final restored = WorkoutSession.fromMap(session.toMap());
       expect(restored.fileName, session.fileName);
+      expect(restored.displayName, 'Marathon Hills');
       expect(restored.durationSeconds, session.durationSeconds);
       expect(restored.distanceKm, session.distanceKm);
-      expect(restored.isUploadedToStrava, true);
+    });
+
+    test('title uses the stored display name', () {
+      final session = WorkoutSession(
+        date: DateTime(2026, 2, 21),
+        fileName: 'route1152412195.gpx',
+        displayName: 'Hillview (Rail Corridor) to Holland V',
+        type: 'gpx',
+        durationSeconds: 3600,
+        distanceKm: 10.5,
+      );
+      expect(session.title, 'Hillview (Rail Corridor) to Holland V');
+    });
+
+    test('title falls back to a prettified file name', () {
+      final session = WorkoutSession(
+        date: DateTime(2026, 2, 21),
+        fileName: 'tempo_5k_progression.json',
+        type: 'workout',
+        durationSeconds: 1800,
+        distanceKm: 5,
+      );
+      expect(session.title, 'tempo 5k progression');
+    });
+
+    test('prettifyFileName strips the extension and underscores', () {
+      expect(WorkoutSession.prettifyFileName('easy_run.gpx'), 'easy run');
+      expect(WorkoutSession.prettifyFileName('hill_repeats.json'),
+          'hill repeats');
+      expect(WorkoutSession.prettifyFileName('route1152412195.gpx'),
+          'route1152412195');
+    });
+  });
+
+  group('Completion rule', () {
+    test('route counts only at 99% of the distance', () {
+      final state = ActiveWorkoutState(workoutFile: routeFile(10000));
+      expect(state.copyWith(totalDistanceKm: 0.5).routeCompleted, false);
+      expect(state.copyWith(totalDistanceKm: 9.8).routeCompleted, false);
+      expect(state.copyWith(totalDistanceKm: 9.9).routeCompleted, true);
+      expect(state.copyWith(totalDistanceKm: 10.4).routeCompleted, true);
+    });
+
+    test('structured workout counts only at 99% of the duration', () {
+      final state = ActiveWorkoutState(workoutFile: workoutFile(1800));
+      expect(state.copyWith(elapsedSeconds: 300).workoutCompleted, false);
+      expect(state.copyWith(elapsedSeconds: 1781).workoutCompleted, false);
+      expect(state.copyWith(elapsedSeconds: 1782).workoutCompleted, true);
+      expect(state.copyWith(elapsedSeconds: 1800).workoutCompleted, true);
+    });
+
+    test('the two rules never apply to the other file type', () {
+      final route = ActiveWorkoutState(workoutFile: routeFile(10000))
+          .copyWith(totalDistanceKm: 10, elapsedSeconds: 10);
+      expect(route.workoutCompleted, false);
+      expect(route.earnedCompletion, true);
+
+      final workout = ActiveWorkoutState(workoutFile: workoutFile(1800))
+          .copyWith(elapsedSeconds: 1800, totalDistanceKm: 0.1);
+      expect(workout.routeCompleted, false);
+      expect(workout.earnedCompletion, true);
+    });
+
+    test('a quit-early run earns nothing', () {
+      final route = ActiveWorkoutState(workoutFile: routeFile(7800))
+          .copyWith(totalDistanceKm: 0.5);
+      expect(route.earnedCompletion, false);
+
+      final workout = ActiveWorkoutState(workoutFile: workoutFile(1800))
+          .copyWith(elapsedSeconds: 600);
+      expect(workout.earnedCompletion, false);
+    });
+
+    test('a route with no distance never completes', () {
+      final state = ActiveWorkoutState(workoutFile: routeFile(0))
+          .copyWith(totalDistanceKm: 5);
+      expect(state.routeCompleted, false);
+      expect(state.earnedCompletion, false);
+    });
+  });
+
+  group('TCX export names', () {
+    test('keeps readable characters and drops the rest', () {
+      expect(
+        TcxFileManager.safeFileName(
+            'Sub3_Hillview (Rail Corridor) to Holland V_2026-02-21'),
+        'Sub3_Hillview _Rail Corridor_ to Holland V_2026-02-21',
+      );
+      expect(TcxFileManager.safeFileName('Sub3_Tempo 5K_2026-02-21'),
+          'Sub3_Tempo 5K_2026-02-21');
+    });
+
+    test('never produces an empty name', () {
+      expect(TcxFileManager.safeFileName(''), 'Sub3_run');
+      expect(TcxFileManager.safeFileName('///'), 'Sub3_run');
     });
   });
 

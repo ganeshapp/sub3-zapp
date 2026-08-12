@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'ble_service.dart';
 
@@ -46,6 +47,15 @@ class FtmsService {
   FtmsReading _lastFtms = const FtmsReading(speedKmh: 0);
   HrReading _lastHr = const HrReading(heartRate: 0);
   int? _rscCadence;
+  Timer? _hrStaleTimer;
+
+  /// How long a heart rate survives without a fresh packet. A watch whose
+  /// battery dies, or one that keeps its GATT link but stops notifying,
+  /// would otherwise freeze the last BPM — and the workout tick would record
+  /// that fabricated number every second for the rest of the run.
+  static const hrMaxAge = Duration(seconds: 10);
+
+  final _hrController = StreamController<HrReading>.broadcast();
 
   FtmsReading get lastFtms => _lastFtms;
   HrReading get lastHr => HrReading(
@@ -53,12 +63,35 @@ class FtmsService {
         cadence: _lastHr.cadence ?? _rscCadence,
       );
 
-  
+  /// Every heart-rate packet, for the live readouts on the Pair Devices
+  /// screen and the Library status strip. Each new listener gets the current
+  /// reading straight away, then every update.
+  Stream<HrReading> get hrStream async* {
+    yield lastHr;
+    yield* _hrController.stream;
+  }
 
   // ── Subscribe to BLE notifications ──
 
-  Future<void> startListening() async {
+  // Both entry points are safe to call again: each subscription replaces its
+  // own predecessor, which is what a reconnect needs, because disconnecting
+  // invalidates the old characteristic handles.
+
+  /// Treadmill data only. Started when a workout starts and stopped when it
+  /// ends; the heart-rate link is deliberately left alone.
+  Future<void> startTreadmillListening() async {
     await _subscribeFtms();
+  }
+
+  /// True once the HR characteristic is subscribed, so callers can top up a
+  /// subscription that never came up without cancelling a working one.
+  bool get isHrListening => _hrDataSub != null;
+
+  /// Heart rate (and the watch's cadence, when it broadcasts RSC). Started as
+  /// soon as the sensor connects and kept alive for the whole app session:
+  /// watches such as the Garmin Forerunner drop the link when nobody is
+  /// subscribed to the HR characteristic.
+  Future<void> startHrListening() async {
     await _subscribeHr();
     await _subscribeRsc();
   }
@@ -191,7 +224,32 @@ class FtmsService {
     }
 
     _lastHr = HrReading(heartRate: hr, cadence: cadence);
+    _hrStaleTimer?.cancel();
+    _hrStaleTimer = Timer(hrMaxAge, _expireHr);
+    _hrController.add(lastHr);
   }
+
+  /// [hrMaxAge] of silence from a sensor that never formally disconnected.
+  /// Drop the reading so the run records no HR and the chips show `--`.
+  /// Cadence is left alone: RSC keeps arriving on its own characteristic.
+  void _expireHr() {
+    _hrStaleTimer = null;
+    if (_lastHr.heartRate == 0) return;
+    _lastHr = const HrReading(heartRate: 0);
+    _hrController.add(lastHr);
+  }
+
+  /// Expire the last heart rate as the staleness timer would.
+  @visibleForTesting
+  void expireHrForTest() => _expireHr();
+
+  /// Feed a raw HR or RSC packet as if it had arrived over BLE — the one
+  /// seam that lets the subscription lifecycle be tested without a radio.
+  @visibleForTesting
+  void receiveHrPacketForTest(List<int> value) => _parseHrData(value);
+
+  @visibleForTesting
+  void receiveRscPacketForTest(List<int> value) => _parseRscData(value);
 
   // ── Parse RSC Measurement (0x2A53) ──
 
@@ -199,6 +257,7 @@ class FtmsService {
     if (value.length < 4) return;
     // Byte 0: flags, Bytes 1-2: speed (uint16, 1/256 m/s), Byte 3: cadence (uint8)
     _rscCadence = value[3];
+    _hrController.add(lastHr);
   }
 
   // ── FTMS Control Point Writes ──
@@ -262,15 +321,33 @@ class FtmsService {
 
   // ── Teardown ──
 
-  void dispose() {
+  /// End-of-workout teardown. Only the treadmill stream goes away — the
+  /// heart-rate subscription stays up so the sensor keeps its link and the
+  /// status chips keep showing a live BPM between runs.
+  void stopTreadmillListening() {
     _ftmsDataSub?.cancel();
+    _ftmsDataSub = null;
+    _lastFtms = const FtmsReading(speedKmh: 0);
+  }
+
+  /// Called when the user explicitly disconnects the HR sensor, and when
+  /// auto-reconnect gives up on it — otherwise [isHrListening] would keep
+  /// claiming a subscription that died with the link, and the next run's
+  /// top-up would skip re-subscribing.
+  void stopHrListening() {
     _hrDataSub?.cancel();
     _rscDataSub?.cancel();
-    _ftmsDataSub = null;
+    _hrStaleTimer?.cancel();
     _hrDataSub = null;
     _rscDataSub = null;
-    _lastFtms = const FtmsReading(speedKmh: 0);
+    _hrStaleTimer = null;
     _lastHr = const HrReading(heartRate: 0);
     _rscCadence = null;
+    _hrController.add(lastHr);
+  }
+
+  void dispose() {
+    stopTreadmillListening();
+    stopHrListening();
   }
 }

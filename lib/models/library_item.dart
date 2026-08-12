@@ -11,6 +11,10 @@ class LibraryItem {
   final String? metadataJson;
   final String? previewPoints;
 
+  /// JSON list of cumulative metres, one sample per second, from the run that
+  /// set the current best time. Used to race a ghost on routes.
+  final String? prTrace;
+
   const LibraryItem({
     this.id,
     required this.name,
@@ -21,6 +25,7 @@ class LibraryItem {
     this.sha,
     this.metadataJson,
     this.previewPoints,
+    this.prTrace,
   });
 
   bool get isDownloaded => filePath != null;
@@ -36,6 +41,7 @@ class LibraryItem {
     String? sha,
     String? metadataJson,
     String? previewPoints,
+    String? prTrace,
   }) {
     return LibraryItem(
       id: id ?? this.id,
@@ -47,6 +53,7 @@ class LibraryItem {
       sha: sha ?? this.sha,
       metadataJson: metadataJson ?? this.metadataJson,
       previewPoints: previewPoints ?? this.previewPoints,
+      prTrace: prTrace ?? this.prTrace,
     );
   }
 
@@ -61,6 +68,7 @@ class LibraryItem {
       'sha': sha,
       'metadata_json': metadataJson,
       'preview_points': previewPoints,
+      'pr_trace': prTrace,
     };
   }
 
@@ -75,6 +83,7 @@ class LibraryItem {
       sha: map['sha'] as String?,
       metadataJson: map['metadata_json'] as String?,
       previewPoints: map['preview_points'] as String?,
+      prTrace: map['pr_trace'] as String?,
     );
   }
 }

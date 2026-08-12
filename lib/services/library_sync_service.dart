@@ -78,6 +78,8 @@ class LibrarySyncService {
           sha: file.sha,
           metadataJson: jsonEncode(metadata),
           previewPoints: jsonEncode(preview),
+          // upsert replaces the row, so carry the PR trace across a re-sync.
+          prTrace: existing?.prTrace,
         );
 
         await DatabaseService.upsertLibraryItem(item);

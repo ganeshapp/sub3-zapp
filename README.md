@@ -13,7 +13,9 @@ Pick the APK that matches your device architecture:
 
 ## Features
 
-### Workout Library
+### Workout Library (the home screen)
+- Three tabs: Library, Stats, Settings. The Library opens first — it is where every run starts.
+- A compact status strip at the top of the Library shows your treadmill and your heart rate sensor, with a live BPM. Tap either chip to pair.
 - Browse and download structured JSON workouts and GPX virtual routes from a public GitHub repository.
 - Rich card UI with mini visualizers: color-coded interval bar charts for JSON, top-down 2D route maps for GPX.
 - Metadata display: name, duration, distance, pace, elevation gain, description.
@@ -23,7 +25,9 @@ Pick the APK that matches your device architecture:
 - Connect to FTMS treadmills via Bluetooth Low Energy.
 - Connect to heart rate monitors (HR Service 0x180D).
 - Connect to Running Speed and Cadence sensors like Garmin watches (RSC Service 0x1814).
-- Auto-reconnect during active workouts.
+- Live heart rate on the pairing screen and on the Library status chip, so you can see the strap or watch working before you start.
+- The heart rate link is opened the moment the sensor connects and stays open for the whole session — moving between tabs or starting and stopping a run never drops it. Watches that idle out when nobody is listening stay paired.
+- Auto-reconnect: a paired heart rate sensor is always brought back, the treadmill during active workouts. Notifications are re-enabled after every reconnect.
 
 ### Live Workout Dashboard
 - Real-time metrics: HR, pace, speed, incline, cadence, distance, and averages.
@@ -31,6 +35,13 @@ Pick the APK that matches your device architecture:
 - Distance progress bar for GPX routes showing current distance, distance remaining, and total distance.
 - Manual Control toggle: switch between automatic treadmill control and manual override at any time.
 - Redesigned stop UX: large inline "CONFIRM STOP" button instead of a dialog. Tap anywhere else to dismiss.
+- Tap any metric marked with a small (?) — on the live screen or the summary — for a plain-English explanation of what the number means.
+
+### Race Your Ghost
+- Finish a virtual route faster than before and Sub3 keeps the distance trace of that run.
+- Next time you run the route, a dimmer white dot shows where your best-ever run was at that exact moment, alongside your red dot.
+- A chip under the distance bar reads `0:12 ahead of PR` in green or `0:05 behind PR` in amber — the time difference at the distance you have covered.
+- The ghost stops at the finish line when it is done; the chip then says the PR is finished. Routes with no personal best simply have no ghost.
 
 ### Treadmill Control
 - Sends FTMS speed and incline commands automatically for JSON workouts.
@@ -42,24 +53,26 @@ Pick the APK that matches your device architecture:
 - GPX files without elevation tags are automatically augmented with real-world elevation data from the Open-Elevation API (free DEM lookup).
 - GPX altitude is interpolated from the route's elevation data during the workout.
 - JSON workout altitude is computed from incline percentage and horizontal distance.
-- TCX files include AltitudeMeters in every trackpoint. Creator name includes "with barometer" so Strava trusts the app's elevation data.
+- TCX files include AltitudeMeters in every trackpoint. Creator name includes "with barometer" so the site you import into trusts the app's elevation data.
 
-### Strava Integration
-- Upload completed runs as TCX files with sport_type=VirtualRun.
-- OAuth Authorization Code flow with secure token storage (flutter_secure_storage).
-- Virtual GPS positions (lat/lon) interpolated into TCX for proper Strava route maps.
-- Elevation gain, heart rate, cadence, and speed data all included in TCX.
-- Connect and disconnect Strava from the Settings page.
+### Export Your Runs
+- Every saved run keeps a TCX file with virtual GPS positions, elevation, heart rate, cadence, and speed.
+- **Save to Downloads** writes the file straight into the phone's Downloads folder, where any file manager can see it. The file is named `Sub3_<run name>_<date>.tcx`.
+- **Share** hands the same file to the system share sheet (email, cloud drive, messaging app).
+- Both actions are on the post-workout summary and on any row in Run History (3-dot menu or long-press).
+- On iOS, where there is no shared Downloads folder, both actions use the share sheet.
+- Upload the TCX to your training site by hand — nothing is sent anywhere automatically.
 
 ### Auto-Screenshots
 - The app captures a screenshot of the live dashboard every 10 minutes during a workout.
 - Screenshots are saved to the phone's gallery in a "Sub3" album.
-- You can manually add them to your Strava activity using "Add Media".
+- Add them to your online activity yourself if you want them there.
 
 ### Stats and History
 - Volume summaries: This Week, This Month, This Year, and Lifetime.
-- Full chronological run history with distance, pace, and Strava upload status.
-- Export any session as a TCX file. Delete any session from history.
+- Full chronological run history showing the route or workout name, distance, and pace.
+- Save or share any session's TCX file. Delete any session from history.
+- Completion badges: a run counts as completed once you cover 99% of a route or run 99% of a structured workout's planned time. Routes also keep your best time, and the ghost trace that goes with it.
 
 ### Other
 - Wakelock: screen stays on during active workouts. Disabled on pause, stop, or discard.
@@ -71,24 +84,9 @@ Pick the APK that matches your device architecture:
 The app requests the following Android permissions:
 - **Bluetooth** -- Scanning, connecting, and communicating with FTMS treadmills and sensors.
 - **Location** -- Required by Android for BLE scanning (no location data is collected or stored).
-- **Internet** -- Fetching workouts from GitHub, elevation data from Open-Elevation, and uploading to Strava.
-- **Files and Media** -- Saving workout screenshots to the phone's gallery.
+- **Internet** -- Fetching workouts from GitHub and elevation data from Open-Elevation.
+- **Files and Media** -- Saving workout screenshots to the phone's gallery. On Android 9 and older, also writing TCX files into the Downloads folder (Android 10+ needs no permission for that).
 - **Wake Lock** -- Keeping the screen on during active workouts.
-
-## Setup (Strava)
-
-To enable Strava uploads, you need your own Strava API application credentials.
-
-1. Create an API Application at https://www.strava.com/settings/api
-2. Set the Authorization Callback Domain to `sub3.app`
-3. Create a `.env` file in the project root:
-
-```
-STRAVA_CLIENT_ID=your_client_id_here
-STRAVA_CLIENT_SECRET=your_client_secret_here
-```
-
-The `.env` file is gitignored and will not be committed to the repository. See `.env.example` for the template.
 
 ## Tech Stack
 
@@ -96,7 +94,7 @@ The `.env` file is gitignored and will not be committed to the repository. See `
 - **State Management:** Riverpod (AsyncNotifier, StateProvider)
 - **Bluetooth:** flutter_blue_plus (FTMS, Heart Rate, RSC services)
 - **Database:** SQLite via sqflite (library items, workout sessions)
-- **Auth:** flutter_web_auth_2 (OAuth redirect), flutter_secure_storage (encrypted token storage)
+- **Export:** MediaStore via a Kotlin MethodChannel (`com.gapp.sub3/exports`) for the Downloads folder, share_plus for the share sheet
 - **Elevation:** Open-Elevation API (DEM lookup for GPX files without elevation data)
 - **Gallery:** gal (saving screenshots to phone gallery)
 - **Protocols:** FTMS opcodes for speed (0x02), incline (0x03), start/stop/pause (0x07/0x08)

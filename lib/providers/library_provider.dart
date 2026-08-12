@@ -68,6 +68,13 @@ class LibraryListNotifier extends AsyncNotifier<List<LibraryItem>> {
     }
   }
 
+  /// Reload cached rows from the DB (e.g. after recordCompletion bumps a
+  /// badge) without hitting the network.
+  Future<void> reloadFromCache() async {
+    final cached = await LibrarySyncService.getCached(_type);
+    state = AsyncValue.data(cached);
+  }
+
   Future<void> downloadFile(String fileName, String downloadUrl) async {
     final content = await GitHubService.downloadFileContent(downloadUrl);
 

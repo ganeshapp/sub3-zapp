@@ -219,8 +219,7 @@ class _HistoryCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final isGpx = session.type == 'gpx';
-    final displayName =
-        session.fileName.replaceAll(RegExp(r'\.(json|gpx)$'), '');
+    final displayName = session.title;
 
     return GestureDetector(
       onLongPress: () => _showActionsMenu(context, ref),
@@ -293,29 +292,36 @@ class _HistoryCard extends ConsumerWidget {
               ],
             ),
 
-            // Strava badge
-            if (session.isUploadedToStrava) ...[
-              const SizedBox(width: 10),
-              Icon(Icons.cloud_done,
-                  color: Colors.deepOrange.shade400, size: 18),
-            ],
-
             // 3-dot menu
             PopupMenuButton<String>(
               icon: Icon(Icons.more_vert, size: 18, color: Colors.white30),
               color: const Color(0xFF2C2C2C),
               onSelected: (v) {
-                if (v == 'export') _exportTcx(context);
+                if (v == 'save') _saveTcx(context);
+                if (v == 'share') _shareTcx(context);
                 if (v == 'delete') _deleteWorkout(context, ref);
               },
               itemBuilder: (_) => [
-                const PopupMenuItem(
-                  value: 'export',
+                PopupMenuItem(
+                  value: 'save',
                   child: Row(
                     children: [
-                      Icon(Icons.file_download, size: 18, color: Colors.white70),
+                      const Icon(Icons.download,
+                          size: 18, color: Colors.white70),
+                      const SizedBox(width: 8),
+                      Text(TcxFileManager.supportsDownloads
+                          ? 'Save to Downloads'
+                          : 'Save TCX'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'share',
+                  child: Row(
+                    children: [
+                      Icon(Icons.ios_share, size: 18, color: Colors.white70),
                       SizedBox(width: 8),
-                      Text('Export TCX'),
+                      Text('Share'),
                     ],
                   ),
                 ),
@@ -358,12 +364,25 @@ class _HistoryCard extends ConsumerWidget {
               ),
             ),
             ListTile(
-              leading: const Icon(Icons.file_download, color: Colors.white70),
-              title: const Text('Export TCX File'),
-              subtitle: const Text('Save to device storage'),
+              leading: const Icon(Icons.download, color: Colors.white70),
+              title: Text(TcxFileManager.supportsDownloads
+                  ? 'Save to Downloads'
+                  : 'Save TCX File'),
+              subtitle: Text(TcxFileManager.supportsDownloads
+                  ? 'TCX file in your Downloads folder'
+                  : 'Save the TCX from the share sheet'),
               onTap: () {
                 Navigator.pop(ctx);
-                _exportTcx(context);
+                _saveTcx(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.ios_share, color: Colors.white70),
+              title: const Text('Share'),
+              subtitle: const Text('Send the TCX to another app'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _shareTcx(context);
               },
             ),
             ListTile(
@@ -410,6 +429,8 @@ class _HistoryCard extends ConsumerWidget {
 
     try {
       await DatabaseService.deleteSession(session.id!);
+      // The stored TCX belongs to this session only — don't leave it behind.
+      await TcxFileManager.delete(session.id!);
       ref.invalidate(statsProvider);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -431,36 +452,63 @@ class _HistoryCard extends ConsumerWidget {
     }
   }
 
-  Future<void> _exportTcx(BuildContext context) async {
-    if (session.id == null) return;
+  /// Export name: `Sub3_<display name>_<yyyy-MM-dd>`.
+  String get _exportName {
+    final datePart =
+        '${session.date.year}-${session.date.month.toString().padLeft(2, '0')}-${session.date.day.toString().padLeft(2, '0')}';
+    return 'Sub3_${session.title}_$datePart';
+  }
+
+  /// iPad anchors the share popover to a rectangle; everywhere else this is
+  /// ignored. Taken before any await, while the row is still mounted.
+  Rect? _shareOrigin(BuildContext context) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return null;
+    return box.localToGlobal(Offset.zero) & box.size;
+  }
+
+  Future<bool> _hasTcx(BuildContext context) async {
+    if (session.id == null) return false;
+    if (await TcxFileManager.exists(session.id!)) return true;
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('TCX file not available for this session.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+    return false;
+  }
+
+  Future<void> _saveTcx(BuildContext context) async {
+    final origin = _shareOrigin(context);
+    if (!await _hasTcx(context)) return;
 
     try {
-      final exists = await TcxFileManager.exists(session.id!);
-      if (!exists) {
+      if (!TcxFileManager.supportsDownloads) {
+        // iOS has no Downloads folder — hand it to the share sheet instead.
+        await TcxFileManager.shareTcx(session.id!, _exportName,
+            sharePositionOrigin: origin);
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('TCX file not available for this session.'),
-              backgroundColor: Colors.orange,
+            SnackBar(
+              content: const Text('Shared — save the TCX from the share sheet.'),
+              backgroundColor: Colors.green.shade700,
+              duration: const Duration(seconds: 4),
             ),
           );
         }
         return;
       }
 
-      final displayName =
-          session.fileName.replaceAll(RegExp(r'\.(json|gpx)$'), '');
-      final datePart =
-          '${session.date.year}-${session.date.month.toString().padLeft(2, '0')}-${session.date.day.toString().padLeft(2, '0')}';
-      final exportName = 'Sub3_${displayName}_$datePart';
-
       final path =
-          await TcxFileManager.exportToDownloads(session.id!, exportName);
+          await TcxFileManager.exportToDownloads(session.id!, _exportName);
 
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('TCX saved to: $path'),
+            content: Text('Saved to $path'),
             backgroundColor: Colors.green.shade700,
             duration: const Duration(seconds: 4),
           ),
@@ -470,7 +518,26 @@ class _HistoryCard extends ConsumerWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Export failed: $e'),
+            content: Text('Save failed: $e'),
+            backgroundColor: Colors.red.shade700,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _shareTcx(BuildContext context) async {
+    final origin = _shareOrigin(context);
+    if (!await _hasTcx(context)) return;
+
+    try {
+      await TcxFileManager.shareTcx(session.id!, _exportName,
+          sharePositionOrigin: origin);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Share failed: $e'),
             backgroundColor: Colors.red.shade700,
           ),
         );

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../providers/workout_provider.dart';
+import '../widgets/metric_info.dart';
 import '../widgets/workout_visualizer.dart';
 import 'post_workout_screen.dart';
 
@@ -16,7 +17,12 @@ class LiveWorkoutScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final workout = ref.watch(activeWorkoutProvider);
     if (workout == null) {
-      return const Scaffold(body: Center(child: Text('No active workout')));
+      // Backstop: never let the user back out of a screen that is about to
+      // become a running workout.
+      return const PopScope(
+        canPop: false,
+        child: Scaffold(body: Center(child: Text('No active workout'))),
+      );
     }
 
     if (workout.phase == WorkoutPhase.finished) {
@@ -145,6 +151,7 @@ class _DashboardViewState extends ConsumerState<_DashboardView> {
           WorkoutVisualizer(
             workoutFile: workout.workoutFile,
             progress: workout.progress,
+            ghostProgress: workout.ghostProgress,
           ),
 
           // Distance progress bar for GPX routes
@@ -154,73 +161,100 @@ class _DashboardViewState extends ConsumerState<_DashboardView> {
               currentKm: workout.totalDistanceKm,
               totalKm: workout.workoutFile.totalDistanceM / 1000,
             ),
+            // Ghost race: how far ahead of (or behind) your PR you are
+            if (workout.ghost != null) ...[
+              const SizedBox(height: 6),
+              _GhostDeltaChip(
+                deltaSeconds: workout.ghostDeltaSeconds,
+                ghostFinished: workout.ghostFinished,
+              ),
+            ],
           ],
           const SizedBox(height: 12),
 
-          // Metric tiles — 3×3 grid
+          // Metric tiles — 3×3 grid. Tile aspect ratio is computed from the
+          // space actually available so the grid always fits (short screens,
+          // the GPX progress bar, the ghost delta chip) instead of clipping
+          // rows behind NeverScrollableScrollPhysics.
           Expanded(
-            child: GridView.count(
-              crossAxisCount: 3,
-              mainAxisSpacing: 8,
-              crossAxisSpacing: 8,
-              childAspectRatio: 1.15,
-              physics: const NeverScrollableScrollPhysics(),
-              children: [
-                _MetricTile(
-                  label: 'HR',
-                  value: workout.currentHr > 0
-                      ? '${workout.currentHr.round()}'
-                      : '--',
-                  unit: 'bpm',
-                  color: Colors.red,
-                ),
-                _MetricTile(
-                  label: 'PACE',
-                  value: _fmtPace(workout.currentPaceMinPerKm),
-                  unit: '/km',
-                ),
-                _MetricTile(
-                  label: 'AVG PACE',
-                  value: _fmtPace(workout.avgPaceMinPerKm),
-                  unit: '/km',
-                ),
-                _MetricTile(
-                  label: 'SPEED',
-                  value: workout.currentSpeedKmh.toStringAsFixed(1),
-                  unit: 'km/h',
-                ),
-                _MetricTile(
-                  label: 'AVG SPEED',
-                  value: workout.avgSpeedKmh.toStringAsFixed(1),
-                  unit: 'km/h',
-                ),
-                _MetricTile(
-                  label: 'INCLINE',
-                  value: workout.currentInclinePct.toStringAsFixed(1),
-                  unit: '%',
-                  color: Colors.green,
-                ),
-                _MetricTile(
-                  label: 'DISTANCE',
-                  value: workout.totalDistanceKm.toStringAsFixed(2),
-                  unit: 'km',
-                  color: Colors.blue,
-                ),
-                _MetricTile(
-                  label: 'CADENCE',
-                  value: workout.currentCadence > 0
-                      ? '${workout.currentCadence}'
-                      : '--',
-                  unit: 'spm',
-                ),
-                _MetricTile(
-                  label: 'AVG HR',
-                  value: workout.avgHr > 0
-                      ? '${workout.avgHr.round()}'
-                      : '--',
-                  unit: 'bpm',
-                ),
-              ],
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                const spacing = 8.0;
+                final tileW = (constraints.maxWidth - spacing * 2) / 3;
+                final tileH = (constraints.maxHeight - spacing * 2) / 3;
+                final ratio =
+                    tileH > 0 ? (tileW / tileH).clamp(0.5, 4.0) : 1.15;
+                return GridView.count(
+                  crossAxisCount: 3,
+                  mainAxisSpacing: spacing,
+                  crossAxisSpacing: spacing,
+                  childAspectRatio: ratio.toDouble(),
+                  physics: const NeverScrollableScrollPhysics(),
+                  children: [
+                    _MetricTile(
+                      label: 'HR',
+                      value: workout.currentHr > 0
+                          ? '${workout.currentHr.round()}'
+                          : '--',
+                      unit: 'bpm',
+                      color: Colors.red,
+                      infoKey: MetricInfo.heartRate,
+                    ),
+                    _MetricTile(
+                      label: 'PACE',
+                      value: _fmtPace(workout.currentPaceMinPerKm),
+                      unit: '/km',
+                      infoKey: MetricInfo.pace,
+                    ),
+                    _MetricTile(
+                      label: 'AVG PACE',
+                      value: _fmtPace(workout.avgPaceMinPerKm),
+                      unit: '/km',
+                      infoKey: MetricInfo.avgPace,
+                    ),
+                    _MetricTile(
+                      label: 'SPEED',
+                      value: workout.currentSpeedKmh.toStringAsFixed(1),
+                      unit: 'km/h',
+                    ),
+                    _MetricTile(
+                      label: 'AVG SPEED',
+                      value: workout.avgSpeedKmh.toStringAsFixed(1),
+                      unit: 'km/h',
+                      infoKey: MetricInfo.avgSpeed,
+                    ),
+                    _MetricTile(
+                      label: 'INCLINE',
+                      value: workout.currentInclinePct.toStringAsFixed(1),
+                      unit: '%',
+                      color: Colors.green,
+                      infoKey: MetricInfo.incline,
+                    ),
+                    _MetricTile(
+                      label: 'DISTANCE',
+                      value: workout.totalDistanceKm.toStringAsFixed(2),
+                      unit: 'km',
+                      color: Colors.blue,
+                    ),
+                    _MetricTile(
+                      label: 'CADENCE',
+                      value: workout.currentCadence > 0
+                          ? '${workout.currentCadence}'
+                          : '--',
+                      unit: 'spm',
+                      infoKey: MetricInfo.cadence,
+                    ),
+                    _MetricTile(
+                      label: 'AVG HR',
+                      value: workout.avgHr > 0
+                          ? '${workout.avgHr.round()}'
+                          : '--',
+                      unit: 'bpm',
+                      infoKey: MetricInfo.heartRate,
+                    ),
+                  ],
+                );
+              },
             ),
           ),
 
@@ -488,55 +522,153 @@ class _MetricTile extends StatelessWidget {
   final String unit;
   final Color? color;
 
+  /// Glossary key: shows a small `(?)` beside the label and explains the
+  /// metric in plain words when the tile is tapped.
+  final String? infoKey;
+
   const _MetricTile({
     required this.label,
     required this.value,
     required this.unit,
     this.color,
+    this.infoKey,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF1E1E1E),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      padding: const EdgeInsets.all(8),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            label,
-            style: GoogleFonts.inter(
-              fontSize: 10,
-              fontWeight: FontWeight.w600,
-              color: Colors.white38,
-              letterSpacing: 1,
+    final hasInfo = MetricInfo.has(infoKey);
+
+    return GestureDetector(
+      onTap: hasInfo ? () => showMetricInfo(context, infoKey) : null,
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E1E1E),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.inter(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white38,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                ),
+                if (hasInfo) ...[
+                  const SizedBox(width: 3),
+                  const MetricInfoCue(size: 10),
+                ],
+              ],
             ),
-          ),
-          const SizedBox(height: 4),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(
-              value,
-              style: GoogleFonts.inter(
-                fontSize: 30,
-                fontWeight: FontWeight.w800,
-                color: color ?? Colors.white,
+            const SizedBox(height: 4),
+            FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                value,
+                style: GoogleFonts.inter(
+                  fontSize: 30,
+                  fontWeight: FontWeight.w800,
+                  color: color ?? Colors.white,
+                ),
               ),
             ),
-          ),
+            Text(
+              unit,
+              style: GoogleFonts.inter(
+                fontSize: 11,
+                fontWeight: FontWeight.w400,
+                color: Colors.white30,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Ghost race delta chip (GPX with a PR trace only) ──
+
+class _GhostDeltaChip extends StatelessWidget {
+  /// Seconds ahead (positive) or behind (negative) your best-ever run, at the
+  /// distance covered so far. Null once you are past the ghost's last point.
+  final int? deltaSeconds;
+  final bool ghostFinished;
+
+  const _GhostDeltaChip({
+    required this.deltaSeconds,
+    required this.ghostFinished,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final delta = deltaSeconds;
+
+    final IconData icon;
+    final Color color;
+    final String text;
+
+    if (delta == null) {
+      icon = Icons.flag;
+      color = Colors.white54;
+      text = 'PR finished';
+    } else if (delta >= 0) {
+      icon = Icons.arrow_drop_up;
+      color = Colors.green;
+      text = '${_fmt(delta)} ahead of PR';
+    } else {
+      icon = Icons.arrow_drop_down;
+      color = Colors.amber;
+      text = '${_fmt(-delta)} behind PR';
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 18, color: color),
+          const SizedBox(width: 4),
           Text(
-            unit,
+            text,
             style: GoogleFonts.inter(
-              fontSize: 11,
-              fontWeight: FontWeight.w400,
-              color: Colors.white30,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: color,
+              letterSpacing: 0.5,
             ),
           ),
+          if (ghostFinished && delta != null) ...[
+            const SizedBox(width: 6),
+            Text(
+              '· ghost finished',
+              style: GoogleFonts.inter(fontSize: 11, color: Colors.white38),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  String _fmt(int seconds) {
+    final m = seconds ~/ 60;
+    final s = seconds % 60;
+    return '$m:${s.toString().padLeft(2, '0')}';
   }
 }

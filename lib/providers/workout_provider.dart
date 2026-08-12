@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
+import '../models/ghost_trace.dart';
 import '../models/telemetry.dart';
 import '../models/workout_file.dart';
 import '../services/ble_service.dart';
@@ -38,8 +39,13 @@ class ActiveWorkoutState {
   // Telemetry array for TCX export
   final List<TelemetryPoint> telemetry;
 
+  /// The best-ever run on this route, to race against. Null for structured
+  /// workouts and for routes with no PR yet.
+  final GhostTrace? ghost;
+
   const ActiveWorkoutState({
     required this.workoutFile,
+    this.ghost,
     this.phase = WorkoutPhase.countdown,
     this.countdownRemaining = 3,
     this.elapsedSeconds = 0,
@@ -78,6 +84,7 @@ class ActiveWorkoutState {
   }) {
     return ActiveWorkoutState(
       workoutFile: workoutFile,
+      ghost: ghost,
       phase: phase ?? this.phase,
       countdownRemaining: countdownRemaining ?? this.countdownRemaining,
       elapsedSeconds: elapsedSeconds ?? this.elapsedSeconds,
@@ -111,6 +118,57 @@ class ActiveWorkoutState {
       return (elapsedSeconds / total).clamp(0.0, 1.0);
     }
   }
+
+  /// True when a route run actually reached the end — covered distance is at
+  /// least 99% of the route. Below that the run still saves to history, it
+  /// just doesn't earn a badge or a best time.
+  bool get routeCompleted {
+    if (!workoutFile.isGpx) return false;
+    final total = workoutFile.totalDistanceM;
+    if (total <= 0) return false;
+    return totalDistanceKm * 1000 >= total * 0.99;
+  }
+
+  /// True when a structured workout ran to the end — elapsed time is at least
+  /// 99% of the planned duration.
+  bool get workoutCompleted {
+    if (workoutFile.isGpx) return false;
+    final total = workoutFile.totalDurationSeconds;
+    if (total <= 0) return false;
+    return elapsedSeconds >= total * 0.99;
+  }
+
+  /// Whether this session counts towards the library completion badge.
+  bool get earnedCompletion => routeCompleted || workoutCompleted;
+
+  // ── Ghost racing (routes only) ──
+
+  /// How far the ghost has run, as a 0.0–1.0 fraction of the route, for the
+  /// second dot on the map. Null when no ghost is armed.
+  double? get ghostProgress {
+    final g = ghost;
+    if (g == null) return null;
+    final total = workoutFile.totalDistanceM;
+    if (total <= 0) return null;
+    return (g.distanceAt(elapsedSeconds) / total).clamp(0.0, 1.0);
+  }
+
+  /// Seconds ahead (positive) or behind (negative) the ghost, judged at the
+  /// distance covered so far. Null when there is no ghost, or once the route
+  /// is further along than the ghost ever got.
+  int? get ghostDeltaSeconds {
+    final g = ghost;
+    if (g == null) return null;
+    final delta = g.deltaAt(
+      elapsedSeconds: elapsedSeconds,
+      distanceM: totalDistanceKm * 1000,
+    );
+    return delta?.round();
+  }
+
+  /// True once the ghost has run out of trace — it is standing at the finish.
+  bool get ghostFinished =>
+      ghost != null && ghost!.hasFinishedBy(elapsedSeconds);
 
   /// Maximum heart rate recorded during the session.
   double get maxHr {
@@ -173,19 +231,31 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
 
   // ── Lifecycle ──
 
-  Future<void> startWorkout(WorkoutFile file) async {
+  /// [ghost] is the route's PR trace, armed only for the route being run.
+  Future<void> startWorkout(WorkoutFile file, {GhostTrace? ghost}) async {
     _resetCommandState();
     WakelockPlus.enable();
     BleService.instance.enableAutoReconnect();
+    BleService.instance.onReconnected = _handleReconnected;
 
     try {
-      await FtmsService.instance.startListening();
+      // Only the treadmill stream is started here. The HR subscription was
+      // opened when the sensor connected and stays up for the whole app
+      // session — starting a workout must never interrupt it. It is only
+      // topped up if it never came up in the first place.
+      await FtmsService.instance.startTreadmillListening();
+      if (!FtmsService.instance.isHrListening) {
+        await FtmsService.instance.startHrListening();
+      }
       await FtmsService.instance.requestControl();
     } catch (_) {
       // BLE may not be connected yet; continue (metrics will read 0)
     }
 
-    state = ActiveWorkoutState(workoutFile: file);
+    state = ActiveWorkoutState(
+      workoutFile: file,
+      ghost: file.isGpx ? ghost : null,
+    );
     _startTimer();
   }
 
@@ -210,6 +280,28 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
       }
     } catch (_) {
       // Prevent timer death from uncaught exceptions
+    }
+  }
+
+  /// Mid-run reconnect recovery: BleService has already resubscribed
+  /// notifications and re-requested control; reset the dedupe sentinels and
+  /// force a transition-style re-send, because a treadmill that dropped its
+  /// target on disconnect would otherwise never be re-commanded — the
+  /// rounded target still matches `_lastSentSpeed`/`_lastSentIncline`.
+  void _handleReconnected(BleDeviceRole role) {
+    if (role != BleDeviceRole.treadmill) return;
+    final s = state;
+    if (s == null || s.phase != WorkoutPhase.running) return;
+    if (s.isManualControlEnabled) return;
+
+    _lastSentSpeed = -1;
+    _lastSentIncline = -1;
+    _lastSentGpxIncline = -1;
+    _commandsSuspended = false;
+    if (s.workoutFile.isGpx) {
+      _sendGpxIncline(s.totalDistanceKm, s.workoutFile);
+    } else {
+      _sendSegmentCommands(isTransition: true);
     }
   }
 
@@ -539,7 +631,10 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
     } catch (_) {}
     WakelockPlus.disable();
     BleService.instance.disableAutoReconnect();
-    FtmsService.instance.dispose();
+    BleService.instance.onReconnected = null;
+    // Treadmill only — the HR sensor keeps its subscription (and therefore
+    // its link) between runs.
+    FtmsService.instance.stopTreadmillListening();
     state = state?.copyWith(phase: WorkoutPhase.finished);
   }
 
@@ -547,6 +642,7 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
     _timer?.cancel();
     _timer = null;
     _resetCommandState();
+    BleService.instance.onReconnected = null;
     WakelockPlus.disable();
     state = null;
   }

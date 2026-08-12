@@ -2,18 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/navigation_provider.dart';
 import 'library_screen.dart';
-import 'dashboard_screen.dart';
 import 'stats_screen.dart';
 import 'settings_screen.dart';
 
 class HomeShell extends ConsumerWidget {
   const HomeShell({super.key});
 
-  static const _titles = ['Library', 'Dashboard', 'Stats', 'Settings'];
+  // Order must match HomeTab: Library (home), Stats, Settings.
+  static const _titles = ['Library', 'Stats', 'Settings'];
 
   static const _screens = <Widget>[
     LibraryScreen(),
-    DashboardScreen(),
     StatsScreen(),
     SettingsScreen(),
   ];
@@ -37,11 +36,6 @@ class HomeShell extends ConsumerWidget {
             icon: Icon(Icons.library_books_outlined),
             activeIcon: Icon(Icons.library_books),
             label: 'Library',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.dashboard_outlined),
-            activeIcon: Icon(Icons.dashboard),
-            label: 'Dashboard',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.bar_chart_outlined),

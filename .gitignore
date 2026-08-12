@@ -52,9 +52,6 @@ ios/Flutter/flutter_export_environment.sh
 # Generated master icon
 app_icon_1024.png
 
-# Environment secrets
-.env
-
 # Sample data files
 *.json
 !pubspec.json

@@ -3,10 +3,13 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
+import '../models/ghost_trace.dart';
 import '../models/library_item.dart';
+import '../providers/ble_provider.dart';
 import '../providers/library_provider.dart';
 import '../providers/workout_provider.dart';
 import '../services/workout_parser.dart';
+import 'device_pairing_screen.dart';
 import 'live_workout_screen.dart';
 
 class LibraryScreen extends StatelessWidget {
@@ -18,6 +21,7 @@ class LibraryScreen extends StatelessWidget {
       length: 2,
       child: Column(
         children: [
+          const _DeviceStatusStrip(),
           const TabBar(
             tabs: [
               Tab(text: 'Structured Workouts'),
@@ -100,7 +104,17 @@ Future<void> _launchWorkout(
   if (item.filePath == null) return;
   try {
     final file = await WorkoutParser.parseFile(item.filePath!);
-    ref.read(activeWorkoutProvider.notifier).startWorkout(file);
+    // Arm the ghost for this route only, and only when it has a PR trace.
+    // A missing or unreadable trace simply means no ghost.
+    final ghost = item.type == LibraryItemType.gpx
+        ? GhostTrace.decode(item.prTrace)
+        : null;
+    // Await: startWorkout only publishes the state after several BLE
+    // round-trips, and LiveWorkoutScreen pushed before that shows its
+    // 'No active workout' branch, which the user can back out of — leaving
+    // the belt running with no live screen.
+    await ref.read(activeWorkoutProvider.notifier).startWorkout(file,
+        ghost: ghost);
     if (context.mounted) {
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const LiveWorkoutScreen()),
@@ -112,6 +126,129 @@ Future<void> _launchWorkout(
         SnackBar(content: Text('Failed to load file: $e')),
       );
     }
+  }
+}
+
+// ── Device status strip (Library is home, so status lives here) ──
+
+class _DeviceStatusStrip extends ConsumerWidget {
+  const _DeviceStatusStrip();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final devices = ref.watch(connectedDevicesProvider);
+    final bpm = ref.watch(liveHeartRateProvider).valueOrNull;
+
+    final treadmillConnected = devices.isTreadmillConnected;
+    final hrConnected = devices.isHrConnected;
+
+    String treadmillLabel;
+    Color treadmillColor;
+    if (treadmillConnected) {
+      final name = devices.treadmill?.platformName ?? '';
+      treadmillLabel = name.isNotEmpty ? name : 'Connected';
+      treadmillColor = Colors.green;
+    } else if (devices.isConnectingTreadmill ||
+        devices.isReconnectingTreadmill) {
+      treadmillLabel =
+          devices.isReconnectingTreadmill ? 'Reconnecting...' : 'Connecting...';
+      treadmillColor = Colors.amber;
+    } else {
+      treadmillLabel = 'Tap to pair';
+      treadmillColor = Colors.white38;
+    }
+
+    String hrLabel;
+    Color hrColor;
+    if (hrConnected) {
+      hrLabel = bpm != null ? '$bpm bpm' : '-- bpm';
+      hrColor = Colors.redAccent;
+    } else if (devices.isConnectingHr || devices.isReconnectingHr) {
+      hrLabel = devices.isReconnectingHr ? 'Reconnecting...' : 'Connecting...';
+      hrColor = Colors.amber;
+    } else {
+      hrLabel = 'Tap to pair';
+      hrColor = Colors.white38;
+    }
+
+    void openPairing() {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const DevicePairingScreen()),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: _StatusChip(
+              icon: Icons.directions_run,
+              label: treadmillLabel,
+              color: treadmillColor,
+              onTap: openPairing,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _StatusChip(
+              icon: Icons.favorite,
+              label: hrLabel,
+              color: hrColor,
+              onTap: openPairing,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _StatusChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withValues(alpha: 0.25)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: color,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

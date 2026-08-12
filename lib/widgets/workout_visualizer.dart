@@ -11,10 +11,15 @@ class WorkoutVisualizer extends StatelessWidget {
   /// 0.0–1.0 progress fraction.
   final double progress;
 
+  /// 0.0–1.0 position of the ghost — the best-ever run on this route — drawn
+  /// as a dimmer second dot. Null when there is no PR to race.
+  final double? ghostProgress;
+
   const WorkoutVisualizer({
     super.key,
     required this.workoutFile,
     required this.progress,
+    this.ghostProgress,
   });
 
   @override
@@ -32,6 +37,7 @@ class WorkoutVisualizer extends StatelessWidget {
             ? _GpxRoutePainter(
                 points: workoutFile.gpxPoints ?? [],
                 progress: progress,
+                ghostProgress: ghostProgress,
               )
             : _IntervalBarPainter(
                 intervals: workoutFile.intervals ?? [],
@@ -101,8 +107,13 @@ class _IntervalBarPainter extends CustomPainter {
 class _GpxRoutePainter extends CustomPainter {
   final List<GpxPoint> points;
   final double progress;
+  final double? ghostProgress;
 
-  _GpxRoutePainter({required this.points, required this.progress});
+  _GpxRoutePainter({
+    required this.points,
+    required this.progress,
+    this.ghostProgress,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -201,6 +212,22 @@ class _GpxRoutePainter extends CustomPainter {
       ..color = Colors.red;
     canvas.drawPath(activePath, activePaint);
 
+    // Ghost dot — your best-ever run at this same moment. Drawn under the
+    // red "you" dot, dimmer and grey so the two are never confused.
+    final ghost = ghostProgress;
+    if (ghost != null) {
+      final ghostPos = _positionAt(ghost.clamp(0.0, 1.0) * totalDist, toCanvas);
+      canvas.drawCircle(
+        ghostPos,
+        9,
+        Paint()
+          ..color = Colors.white.withValues(alpha: 0.22)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+      );
+      canvas.drawCircle(
+          ghostPos, 4, Paint()..color = Colors.white.withValues(alpha: 0.55));
+    }
+
     // Progress dot
     canvas.drawCircle(dotPos, 5, Paint()..color = Colors.red);
     canvas.drawCircle(
@@ -212,9 +239,24 @@ class _GpxRoutePainter extends CustomPainter {
     );
   }
 
+  /// Canvas position of a point [distM] metres along the route.
+  Offset _positionAt(double distM, Offset Function(GpxPoint) toCanvas) {
+    if (distM <= 0) return toCanvas(points.first);
+    for (var i = 1; i < points.length; i++) {
+      if (points[i].cumulativeDistanceM >= distM) {
+        final prev = points[i - 1];
+        final segLen = points[i].cumulativeDistanceM - prev.cumulativeDistanceM;
+        if (segLen <= 0) return toCanvas(prev);
+        final t = ((distM - prev.cumulativeDistanceM) / segLen).clamp(0.0, 1.0);
+        return Offset.lerp(toCanvas(prev), toCanvas(points[i]), t)!;
+      }
+    }
+    return toCanvas(points.last);
+  }
+
   @override
   bool shouldRepaint(covariant _GpxRoutePainter old) =>
-      old.progress != progress;
+      old.progress != progress || old.ghostProgress != ghostProgress;
 }
 
 // ── Shared progress dot ──

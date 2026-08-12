@@ -44,6 +44,7 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
     final isScanning = ref.watch(bleScanningProvider).valueOrNull ?? false;
     final scanResults = ref.watch(bleScanResultsProvider).valueOrNull ?? [];
     final devices = ref.watch(connectedDevicesProvider);
+    final liveBpm = ref.watch(liveHeartRateProvider).valueOrNull;
 
     return Scaffold(
       appBar: AppBar(
@@ -72,7 +73,7 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
           if (state != BluetoothAdapterState.on) {
             return _BluetoothOffView(adapterState: state);
           }
-          return _buildBody(theme, scanResults, devices, isScanning);
+          return _buildBody(theme, scanResults, devices, isScanning, liveBpm);
         },
       ),
     );
@@ -83,6 +84,7 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
     List<ScanResult> scanResults,
     ConnectedDevicesState devices,
     bool isScanning,
+    int? liveBpm,
   ) {
     // Filter to recognized FTMS / HR devices only.
     final recognized = <(ScanResult, BleDeviceRole)>[];
@@ -100,6 +102,7 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
           device: devices.treadmill,
           connectionState: devices.treadmillState,
           isConnecting: devices.isConnectingTreadmill,
+          isReconnecting: devices.isReconnectingTreadmill,
           onDisconnect: () => ref
               .read(connectedDevicesProvider.notifier)
               .disconnectDevice(BleDeviceRole.treadmill),
@@ -111,6 +114,11 @@ class _DevicePairingScreenState extends ConsumerState<DevicePairingScreen> {
           device: devices.hrSensor,
           connectionState: devices.hrSensorState,
           isConnecting: devices.isConnectingHr,
+          isReconnecting: devices.isReconnectingHr,
+          // Live BPM as soon as the sensor is subscribed, so you can see the
+          // strap or watch actually working before you start a run.
+          showLiveHeartRate: true,
+          liveBpm: liveBpm,
           onDisconnect: () => ref
               .read(connectedDevicesProvider.notifier)
               .disconnectDevice(BleDeviceRole.heartRate),
@@ -221,7 +229,12 @@ class _ConnectedDeviceCard extends StatelessWidget {
   final BluetoothDevice? device;
   final BluetoothConnectionState connectionState;
   final bool isConnecting;
+  final bool isReconnecting;
   final VoidCallback onDisconnect;
+
+  /// Heart-rate card only: show the live BPM beside the sensor name.
+  final bool showLiveHeartRate;
+  final int? liveBpm;
 
   const _ConnectedDeviceCard({
     required this.label,
@@ -230,6 +243,9 @@ class _ConnectedDeviceCard extends StatelessWidget {
     required this.connectionState,
     required this.isConnecting,
     required this.onDisconnect,
+    this.isReconnecting = false,
+    this.showLiveHeartRate = false,
+    this.liveBpm,
   });
 
   @override
@@ -239,7 +255,10 @@ class _ConnectedDeviceCard extends StatelessWidget {
 
     final Color statusColor;
     final String statusText;
-    if (isConnecting) {
+    if (isReconnecting) {
+      statusColor = Colors.amber;
+      statusText = 'Reconnecting...';
+    } else if (isConnecting) {
       statusColor = Colors.amber;
       statusText = 'Connecting...';
     } else if (connected && device != null) {
@@ -279,14 +298,39 @@ class _ConnectedDeviceCard extends StatelessWidget {
               children: [
                 Text(label, style: theme.textTheme.titleLarge?.copyWith(fontSize: 15)),
                 const SizedBox(height: 2),
-                Text(statusText, style: theme.textTheme.bodyMedium?.copyWith(
-                  color: statusColor,
-                  fontSize: 13,
-                )),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        statusText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: statusColor,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    if (showLiveHeartRate && connected) ...[
+                      const SizedBox(width: 8),
+                      Icon(Icons.favorite,
+                          size: 13, color: Colors.red.shade400),
+                      const SizedBox(width: 3),
+                      Text(
+                        liveBpm != null ? '$liveBpm bpm' : '-- bpm',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: Colors.red.shade400,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
               ],
             ),
           ),
-          if (isConnecting)
+          if (isConnecting || isReconnecting)
             const SizedBox(
               width: 22, height: 22,
               child: CircularProgressIndicator(strokeWidth: 2),
