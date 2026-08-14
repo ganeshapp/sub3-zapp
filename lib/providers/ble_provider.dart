@@ -239,3 +239,29 @@ final connectedDevicesProvider =
     NotifierProvider<ConnectedDevicesNotifier, ConnectedDevicesState>(
   ConnectedDevicesNotifier.new,
 );
+
+// ── Ready to start ──
+
+/// What a refused start says, wherever it is refused, so the Library and the
+/// engine never explain themselves differently.
+const treadmillRequiredMessage =
+    'Connect your treadmill first — there is nothing to record without it.';
+
+/// The Library device strip's call to action while nothing is paired.
+const connectTreadmillCallToAction = 'Connect your treadmill to start a run';
+
+/// The treadmill must be connected before a session can start: without it
+/// there is no speed to record and nothing to control, and the run saves as a
+/// row of zeros.
+///
+/// A device that is still connecting — or reconnecting after a drop — is not
+/// ready either: starting mid-handshake gives the same empty run. The heart
+/// rate sensor is deliberately not considered; a run without a strap is still
+/// a run.
+final canStartSessionProvider = Provider<bool>((ref) {
+  final devices = ref.watch(connectedDevicesProvider);
+  if (devices.isConnectingTreadmill || devices.isReconnectingTreadmill) {
+    return false;
+  }
+  return devices.isTreadmillConnected;
+});

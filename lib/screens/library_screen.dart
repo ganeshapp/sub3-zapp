@@ -65,6 +65,7 @@ class _LibraryTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final itemsAsync = ref.watch(itemsProvider);
+    final canStart = ref.watch(canStartSessionProvider);
 
     return itemsAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -87,6 +88,9 @@ class _LibraryTab extends ConsumerWidget {
               final item = items[index];
               return _RichCard(
                 item: item,
+                canStart: canStart,
+                // Still tappable while unpaired: _launchWorkout explains why
+                // nothing happened instead of leaving a dead grey button.
                 onStart: item.isDownloaded
                     ? () => _launchWorkout(context, ref, item)
                     : null,
@@ -99,9 +103,39 @@ class _LibraryTab extends ConsumerWidget {
   }
 }
 
+/// Say why the run did not start, and put the fix one tap away. A greyed
+/// control that silently swallows the tap is worse than no control at all.
+void _showPairPrompt(BuildContext context) {
+  // Held now: the card that was tapped can be scrolled out of the list
+  // before the rider reaches for Pair.
+  final navigator = Navigator.of(context);
+  // Replace, never queue: poking at two or three dead play buttons is the
+  // natural thing to do, and three queued 4 s messages would replay the same
+  // sentence for a quarter of a minute.
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: const Text(treadmillRequiredMessage),
+        action: SnackBarAction(
+          label: 'Pair',
+          onPressed: () => navigator.push(
+            MaterialPageRoute(builder: (_) => const DevicePairingScreen()),
+          ),
+        ),
+      ),
+    );
+}
+
 Future<void> _launchWorkout(
     BuildContext context, WidgetRef ref, LibraryItem item) async {
   if (item.filePath == null) return;
+  // No treadmill, no run: there would be no speed to record and nothing to
+  // control, so the session would save as a row of zeros.
+  if (!ref.read(canStartSessionProvider)) {
+    _showPairPrompt(context);
+    return;
+  }
   try {
     final file = await WorkoutParser.parseFile(item.filePath!);
     // Arm the ghost for this route only, and only when it has a PR trace.
@@ -113,13 +147,18 @@ Future<void> _launchWorkout(
     // round-trips, and LiveWorkoutScreen pushed before that shows its
     // 'No active workout' branch, which the user can back out of — leaving
     // the belt running with no live screen.
-    await ref.read(activeWorkoutProvider.notifier).startWorkout(file,
-        ghost: ghost);
-    if (context.mounted) {
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const LiveWorkoutScreen()),
-      );
+    final started = await ref
+        .read(activeWorkoutProvider.notifier)
+        .startWorkout(file, ghost: ghost);
+    if (!context.mounted) return;
+    if (!started) {
+      // The treadmill dropped between the tap and the handshake.
+      _showPairPrompt(context);
+      return;
     }
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const LiveWorkoutScreen()),
+    );
   } catch (e) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -139,24 +178,31 @@ class _DeviceStatusStrip extends ConsumerWidget {
     final devices = ref.watch(connectedDevicesProvider);
     final bpm = ref.watch(liveHeartRateProvider).valueOrNull;
 
-    final treadmillConnected = devices.isTreadmillConnected;
-    final hrConnected = devices.isHrConnected;
-
-    String treadmillLabel;
-    Color treadmillColor;
-    if (treadmillConnected) {
-      final name = devices.treadmill?.platformName ?? '';
-      treadmillLabel = name.isNotEmpty ? name : 'Connected';
-      treadmillColor = Colors.green;
-    } else if (devices.isConnectingTreadmill ||
-        devices.isReconnectingTreadmill) {
-      treadmillLabel =
-          devices.isReconnectingTreadmill ? 'Reconnecting...' : 'Connecting...';
-      treadmillColor = Colors.amber;
-    } else {
-      treadmillLabel = 'Tap to pair';
-      treadmillColor = Colors.white38;
+    void openPairing() {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const DevicePairingScreen()),
+      );
     }
+
+    // Nothing in the Library can be started without a treadmill, so the strip
+    // stops being a passive status line and becomes the one thing worth
+    // doing. The heart rate sensor never appears here — it is optional.
+    if (!ref.watch(canStartSessionProvider)) {
+      return _PairPrompt(
+        label: devices.isReconnectingTreadmill
+            ? 'Reconnecting...'
+            : devices.isConnectingTreadmill
+                ? 'Connecting...'
+                : connectTreadmillCallToAction,
+        onPair: openPairing,
+      );
+    }
+
+    final name = devices.treadmill?.platformName ?? '';
+    final treadmillLabel = name.isNotEmpty ? name : 'Connected';
+    const treadmillColor = Colors.green;
+
+    final hrConnected = devices.isHrConnected;
 
     String hrLabel;
     Color hrColor;
@@ -169,12 +215,6 @@ class _DeviceStatusStrip extends ConsumerWidget {
     } else {
       hrLabel = 'Tap to pair';
       hrColor = Colors.white38;
-    }
-
-    void openPairing() {
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const DevicePairingScreen()),
-      );
     }
 
     return Padding(
@@ -252,13 +292,80 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
+/// The device strip while there is no treadmill to run on. Amber, not the
+/// error red: nothing is broken, there is just one thing left to do.
+class _PairPrompt extends StatelessWidget {
+  final String label;
+  final VoidCallback onPair;
+
+  const _PairPrompt({required this.label, required this.onPair});
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Colors.amber;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withValues(alpha: 0.25)),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.directions_run, size: 14, color: color),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: color,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            FilledButton(
+              onPressed: onPair,
+              style: FilledButton.styleFrom(
+                backgroundColor: color,
+                foregroundColor: Colors.black,
+                minimumSize: const Size(0, 32),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                // The 8 px chip radius, not FilledButton's default pill: the
+                // strip it replaces is a row of rounded rectangles, and FTP4's
+                // banner is built the same way.
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+                textStyle: GoogleFonts.inter(
+                    fontSize: 12, fontWeight: FontWeight.w700),
+              ),
+              child: const Text('Pair'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // ── Rich Card (instant from cache) ──
 
 class _RichCard extends StatelessWidget {
   final LibraryItem item;
   final VoidCallback? onStart;
 
-  const _RichCard({required this.item, this.onStart});
+  /// False while no treadmill is connected: the play button greys out, but
+  /// the card still takes the tap so it can say why.
+  final bool canStart;
+
+  const _RichCard({required this.item, required this.canStart, this.onStart});
 
   @override
   Widget build(BuildContext context) {
@@ -474,10 +581,13 @@ class _RichCard extends StatelessWidget {
           const SizedBox(width: 6),
         ],
 
-        // Play icon
+        // Play icon -- visibly disabled, never hidden, while unpaired
         if (item.isDownloaded)
           Icon(Icons.play_circle_filled,
-              color: theme.colorScheme.primary, size: 28),
+              color: canStart
+                  ? theme.colorScheme.primary
+                  : Colors.white.withValues(alpha: 0.20),
+              size: 28),
       ],
     );
   }

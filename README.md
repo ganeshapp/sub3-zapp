@@ -16,18 +16,19 @@ Pick the APK that matches your device architecture:
 ### Workout Library (the home screen)
 - Three tabs: Library, Stats, Settings. The Library opens first — it is where every run starts.
 - A compact status strip at the top of the Library shows your treadmill and your heart rate sensor, with a live BPM. Tap either chip to pair.
+- Your treadmill has to be paired before a run can start — without it there is no speed to record and nothing to control. Until it is, the strip turns into `Connect your treadmill to start a run` with a **Pair** button, and the play buttons are greyed out. Tap one anyway and it tells you why, with a Pair shortcut. A heart rate sensor is optional and never blocks a run.
 - Browse and download structured JSON workouts and GPX virtual routes from a public GitHub repository.
 - Rich card UI with mini visualizers: color-coded interval bar charts for JSON, top-down 2D route maps for GPX.
 - Metadata display: name, duration, distance, pace, elevation gain, description.
 - SHA-based caching with versioning. Only changed files are re-fetched from GitHub, so the Library tab opens instantly.
 
 ### BLE Device Pairing
-- Connect to FTMS treadmills via Bluetooth Low Energy.
+- Connect to FTMS treadmills via Bluetooth Low Energy. The treadmill is required to start a structured workout or a virtual run; the heart rate sensor is always optional.
 - Connect to heart rate monitors (HR Service 0x180D).
 - Connect to Running Speed and Cadence sensors like Garmin watches (RSC Service 0x1814).
 - Live heart rate on the pairing screen and on the Library status chip, so you can see the strap or watch working before you start.
 - The heart rate link is opened the moment the sensor connects and stays open for the whole session — moving between tabs or starting and stopping a run never drops it. Watches that idle out when nobody is listening stay paired.
-- Auto-reconnect: a paired heart rate sensor is always brought back, the treadmill during active workouts. Notifications are re-enabled after every reconnect.
+- Auto-reconnect: a paired heart rate sensor is always brought back, the treadmill during active workouts. Notifications are re-enabled after every reconnect. A run already under way is never stopped because a device dropped — the pairing requirement is only about starting.
 
 ### Live Workout Dashboard
 - Real-time metrics: HR, pace, speed, incline, cadence, distance, and averages.

@@ -7,6 +7,7 @@ import '../models/telemetry.dart';
 import '../models/workout_file.dart';
 import '../services/ble_service.dart';
 import '../services/ftms_service.dart';
+import 'ble_provider.dart';
 
 // ── State ──
 
@@ -232,31 +233,52 @@ class ActiveWorkoutNotifier extends Notifier<ActiveWorkoutState?> {
   // ── Lifecycle ──
 
   /// [ghost] is the route's PR trace, armed only for the route being run.
-  Future<void> startWorkout(WorkoutFile file, {GhostTrace? ghost}) async {
+  ///
+  /// Returns true when the run actually started. With no treadmill connected
+  /// there is no speed to record and nothing to control, so the run is refused
+  /// before anything is touched — no wakelock, no auto-reconnect, no BLE
+  /// subscriptions, no state — and refused again if the treadmill data
+  /// subscription will not come up. The Library disables its start affordances
+  /// so the first check should never fire; it is here so no call site can
+  /// quietly create a session of zeros.
+  Future<bool> startWorkout(WorkoutFile file, {GhostTrace? ghost}) async {
+    if (!ref.read(canStartSessionProvider)) return false;
+
+    // The treadmill subscription *is* the run: without it every tick records a
+    // zero. A belt switched off keeps its GATT link until the supervision
+    // timeout, so the gate above can still be true while the radio is dead —
+    // and the subscribe is where that shows up. Refuse rather than open a
+    // session of zeros. Nothing has been touched yet, so nothing to undo.
+    try {
+      await FtmsService.instance.startTreadmillListening();
+    } catch (_) {
+      return false;
+    }
+
     _resetCommandState();
     WakelockPlus.enable();
     BleService.instance.enableAutoReconnect();
     BleService.instance.onReconnected = _handleReconnected;
 
     try {
-      // Only the treadmill stream is started here. The HR subscription was
-      // opened when the sensor connected and stays up for the whole app
-      // session — starting a workout must never interrupt it. It is only
-      // topped up if it never came up in the first place.
-      await FtmsService.instance.startTreadmillListening();
+      // The HR subscription was opened when the sensor connected and stays up
+      // for the whole app session — starting a workout must never interrupt
+      // it. It is only topped up if it never came up in the first place, and
+      // HR is optional, so nothing here can stop the run.
       if (!FtmsService.instance.isHrListening) {
         await FtmsService.instance.startHrListening();
       }
+      // Some firmware refuses control; the belt still runs, the rider drives
+      // it by hand.
       await FtmsService.instance.requestControl();
-    } catch (_) {
-      // BLE may not be connected yet; continue (metrics will read 0)
-    }
+    } catch (_) {}
 
     state = ActiveWorkoutState(
       workoutFile: file,
       ghost: file.isGpx ? ghost : null,
     );
     _startTimer();
+    return true;
   }
 
   void _startTimer() {
