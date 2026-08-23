@@ -8,6 +8,7 @@ import '../providers/library_provider.dart';
 import '../providers/workout_provider.dart';
 import '../providers/stats_provider.dart';
 import '../services/database_service.dart';
+import '../services/fit_generator.dart';
 import '../services/tcx_file_manager.dart';
 import '../services/tcx_generator.dart';
 import '../widgets/metric_info.dart';
@@ -21,6 +22,7 @@ class PostWorkoutScreen extends ConsumerStatefulWidget {
 
 class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
   bool _exporting = false;
+  String _exportingLabel = '';
   int? _savedSessionId;
 
   /// In-flight save, memoized so concurrent callers (Save & Exit tapped while
@@ -144,7 +146,9 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
                   // Action buttons
                   Column(
                     children: [
-                      // Export row: save the TCX where the user can find it
+                      // Export rows: FIT first — it is the file Strava tags
+                      // as a Virtual Run — with TCX one tap below as the
+                      // proven fallback.
                       Row(
                         children: [
                           Expanded(
@@ -152,12 +156,12 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
                             child: SizedBox(
                               height: 48,
                               child: FilledButton.icon(
-                                onPressed: () => _saveTcx(workout),
+                                onPressed: () => _saveFit(workout),
                                 icon: const Icon(Icons.download, size: 20),
                                 label: Text(
                                   TcxFileManager.supportsDownloads
-                                      ? 'Save TCX to Downloads'
-                                      : 'Save TCX',
+                                      ? 'Save FIT to Downloads'
+                                      : 'Save FIT',
                                 ),
                                 style: FilledButton.styleFrom(
                                   backgroundColor: Colors.blueGrey.shade600,
@@ -172,9 +176,52 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
                             child: SizedBox(
                               height: 48,
                               child: OutlinedButton.icon(
+                                onPressed: () => _shareFit(workout),
+                                icon: const Icon(Icons.ios_share, size: 18),
+                                label: const Text('Share FIT'),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.white70,
+                                  side: const BorderSide(color: Colors.white24),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            flex: 2,
+                            child: SizedBox(
+                              height: 48,
+                              child: OutlinedButton.icon(
+                                onPressed: () => _saveTcx(workout),
+                                icon: const Icon(Icons.download, size: 18),
+                                label: Text(
+                                  TcxFileManager.supportsDownloads
+                                      ? 'Save TCX to Downloads'
+                                      : 'Save TCX',
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: Colors.white70,
+                                  side: const BorderSide(color: Colors.white24),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: SizedBox(
+                              height: 48,
+                              child: OutlinedButton.icon(
                                 onPressed: () => _shareTcx(workout),
                                 icon: const Icon(Icons.ios_share, size: 18),
-                                label: const Text('Share'),
+                                label: const Text('Share TCX'),
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor: Colors.white70,
                                   side: const BorderSide(color: Colors.white24),
@@ -233,7 +280,7 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
             ),
           ),
 
-          // Loading overlay while the TCX is written / shared
+          // Loading overlay while the FIT / TCX is written / shared
           if (_exporting)
             Container(
               color: Colors.black.withValues(alpha: 0.7),
@@ -244,7 +291,7 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
                     const CircularProgressIndicator(color: Colors.deepOrange),
                     const SizedBox(height: 20),
                     Text(
-                      'Preparing TCX file...',
+                      _exportingLabel,
                       style: GoogleFonts.inter(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
@@ -317,6 +364,23 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
         totalTimeSeconds: w.elapsedSeconds,
       );
       await TcxFileManager.save(_savedSessionId!, tcx);
+
+      // The FIT sibling — the file Strava tags as a Virtual Run. Best
+      // effort: a FIT encoding failure must never block the save, so the
+      // session and its TCX always land and the FIT actions simply don't
+      // offer a file for this run.
+      try {
+        final fit = FitGenerator.generate(
+          startTime: startTime,
+          telemetry: w.telemetry,
+          totalDistanceM: w.totalDistanceKm * 1000,
+          totalTimeSeconds: w.elapsedSeconds,
+          elevationGainM: w.elevationGain,
+        );
+        await TcxFileManager.saveFit(_savedSessionId!, fit);
+      } catch (_) {
+        // TCX remains the safety net.
+      }
     }
 
     // Completion tracking: only a genuinely finished route (≥99% of the
@@ -372,10 +436,60 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
     return 'Sub3_${w.workoutFile.displayName}_$datePart';
   }
 
+  Future<void> _saveFit(ActiveWorkoutState w) async {
+    if (_exporting) return;
+    if (_nothingToExport(w)) return;
+    final origin = _shareOrigin();
+    _exportingLabel = 'Preparing FIT file...';
+    setState(() => _exporting = true);
+    try {
+      final sessionId = await _ensureSaved(w);
+      if (sessionId == null) throw Exception('Could not save this run');
+      if (!await _fitAvailable(sessionId)) return;
+
+      if (!TcxFileManager.supportsDownloads) {
+        // iOS has no Downloads folder — hand it to the share sheet instead.
+        await TcxFileManager.shareFit(sessionId, _exportName(w),
+            sharePositionOrigin: origin);
+        _snack('Shared — save the FIT from the share sheet.',
+            Colors.green.shade700);
+        return;
+      }
+
+      final path =
+          await TcxFileManager.exportFitToDownloads(sessionId, _exportName(w));
+      _snack('Saved to $path', Colors.green.shade700);
+    } catch (e) {
+      _snack('Save failed: $e', Colors.red.shade700);
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  Future<void> _shareFit(ActiveWorkoutState w) async {
+    if (_exporting) return;
+    if (_nothingToExport(w)) return;
+    final origin = _shareOrigin();
+    _exportingLabel = 'Preparing FIT file...';
+    setState(() => _exporting = true);
+    try {
+      final sessionId = await _ensureSaved(w);
+      if (sessionId == null) throw Exception('Could not save this run');
+      if (!await _fitAvailable(sessionId)) return;
+      await TcxFileManager.shareFit(sessionId, _exportName(w),
+          sharePositionOrigin: origin);
+    } catch (e) {
+      _snack('Share failed: $e', Colors.red.shade700);
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
   Future<void> _saveTcx(ActiveWorkoutState w) async {
     if (_exporting) return;
     if (_nothingToExport(w)) return;
     final origin = _shareOrigin();
+    _exportingLabel = 'Preparing TCX file...';
     setState(() => _exporting = true);
     try {
       final sessionId = await _ensureSaved(w);
@@ -391,7 +505,7 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
       }
 
       final path =
-          await TcxFileManager.exportToDownloads(sessionId, _exportName(w));
+          await TcxFileManager.exportTcxToDownloads(sessionId, _exportName(w));
       _snack('Saved to $path', Colors.green.shade700);
     } catch (e) {
       _snack('Save failed: $e', Colors.red.shade700);
@@ -404,6 +518,7 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
     if (_exporting) return;
     if (_nothingToExport(w)) return;
     final origin = _shareOrigin();
+    _exportingLabel = 'Preparing TCX file...';
     setState(() => _exporting = true);
     try {
       final sessionId = await _ensureSaved(w);
@@ -415,6 +530,15 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
     } finally {
       if (mounted) setState(() => _exporting = false);
     }
+  }
+
+  /// FIT generation is best-effort at save time; if it failed, point the
+  /// runner at the TCX buttons instead of throwing a raw error.
+  Future<bool> _fitAvailable(int sessionId) async {
+    if (await TcxFileManager.hasFit(sessionId)) return true;
+    _snack('FIT file not available for this run — use the TCX buttons instead.',
+        Colors.orange.shade800);
+    return false;
   }
 
   /// iPad anchors the share popover to a rectangle; everywhere else this is
@@ -472,8 +596,8 @@ class _PostWorkoutScreenState extends ConsumerState<PostWorkoutScreen> {
     );
   }
 
-  /// Exporting a TCX saves the session first, so Discard has to undo that:
-  /// remove the row, its TCX file, and the completion badge bump.
+  /// Exporting saves the session first, so Discard has to undo that:
+  /// remove the row, its FIT/TCX files, and the completion badge bump.
   Future<void> _undoSave() async {
     if (_savedSessionId == null) return;
     try {

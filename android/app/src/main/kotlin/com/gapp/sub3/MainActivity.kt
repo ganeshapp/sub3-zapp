@@ -11,9 +11,11 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 /**
- * Hosts the `com.gapp.sub3/exports` channel, which writes a text file into the
- * phone's public Downloads folder. Direct writes to /Download are blocked from
- * API 29 on, so this uses MediaStore there and the public directory below that.
+ * Hosts the `com.gapp.sub3/exports` channel, which writes a file into the
+ * phone's public Downloads folder. The Dart side sends raw bytes so binary
+ * FIT files survive intact (TCX arrives UTF-8 encoded through the same path).
+ * Direct writes to /Download are blocked from API 29 on, so this uses
+ * MediaStore there and the public directory below that.
  */
 class MainActivity : FlutterActivity() {
 
@@ -29,17 +31,17 @@ class MainActivity : FlutterActivity() {
                         val fileName = call.argument<String>("fileName")
                         val mimeType = call.argument<String>("mimeType")
                             ?: "application/octet-stream"
-                        val content = call.argument<String>("content")
-                        if (fileName.isNullOrEmpty() || content == null) {
+                        val bytes = call.argument<ByteArray>("bytes")
+                        if (fileName.isNullOrEmpty() || bytes == null) {
                             result.error(
                                 "BAD_ARGS",
-                                "fileName and content are required",
+                                "fileName and bytes are required",
                                 null,
                             )
                             return@setMethodCallHandler
                         }
                         try {
-                            result.success(saveToDownloads(fileName, mimeType, content))
+                            result.success(saveToDownloads(fileName, mimeType, bytes))
                         } catch (e: Exception) {
                             result.error(
                                 "SAVE_FAILED",
@@ -55,11 +57,11 @@ class MainActivity : FlutterActivity() {
     }
 
     /** Returns the user-facing path, e.g. `Download/Sub3_Hillview.tcx`. */
-    private fun saveToDownloads(fileName: String, mimeType: String, content: String): String {
+    private fun saveToDownloads(fileName: String, mimeType: String, bytes: ByteArray): String {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            saveViaMediaStore(fileName, mimeType, content)
+            saveViaMediaStore(fileName, mimeType, bytes)
         } else {
-            saveToPublicDir(fileName, content)
+            saveToPublicDir(fileName, bytes)
         }
     }
 
@@ -68,7 +70,7 @@ class MainActivity : FlutterActivity() {
      * through the resolver, then publish. MediaStore de-duplicates names itself
      * (`file (1).tcx`), so no manual collision handling is needed here.
      */
-    private fun saveViaMediaStore(fileName: String, mimeType: String, content: String): String {
+    private fun saveViaMediaStore(fileName: String, mimeType: String, bytes: ByteArray): String {
         val resolver = contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, fileName)
@@ -83,7 +85,7 @@ class MainActivity : FlutterActivity() {
         try {
             resolver.openOutputStream(uri).use { out ->
                 if (out == null) throw IllegalStateException("Could not open Downloads for writing")
-                out.write(content.toByteArray(Charsets.UTF_8))
+                out.write(bytes)
                 out.flush()
             }
         } catch (e: Exception) {
@@ -112,7 +114,7 @@ class MainActivity : FlutterActivity() {
      * API < 29: write straight into the public Downloads directory and tell the
      * media scanner about it so the file shows up immediately.
      */
-    private fun saveToPublicDir(fileName: String, content: String): String {
+    private fun saveToPublicDir(fileName: String, bytes: ByteArray): String {
         val dir = Environment.getExternalStoragePublicDirectory(
             Environment.DIRECTORY_DOWNLOADS,
         )
@@ -132,7 +134,7 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        target.writeText(content, Charsets.UTF_8)
+        target.writeBytes(bytes)
         MediaScannerConnection.scanFile(this, arrayOf(target.absolutePath), null, null)
         return "${Environment.DIRECTORY_DOWNLOADS}/${target.name}"
     }

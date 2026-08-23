@@ -74,17 +74,20 @@ SQLite file `sub3.db`, currently at schema version 3. Upgrades only ever `ALTER 
   * *Manual Override Detection:* If the FTMS Read characteristic reports a speed different from the currently commanded interval speed, the app assumes a manual override. The app must immediately pause sending automated speed commands until the next interval block begins, logging the physical speed actually run.
 
 ### Feature 5: Post-Workout Summary & Export
-* **Summary Screen:** Titled with the route/workout display name. Displays total metrics, each explained in plain words on tap (`(?)` cue). Four actions: "Save TCX to Downloads", "Share", "Save & Exit" and "Discard".
-* **Data Compilation:** The 1-second telemetry arrays are converted into a standard `.TCX` file, kept with the session so it can be exported again later from history. The Creator name keeps the "with barometer" suffix so importers trust the app's elevation data.
-* **Discard:** Exporting saves the session first, so Discard deletes that row and its TCX file again and reverts the completion badge / best time.
+* **Summary Screen:** Titled with the route/workout display name. Displays total metrics, each explained in plain words on tap (`(?)` cue). Six actions: a primary FIT export row ("Save FIT to Downloads", "Share FIT"), a secondary TCX row one tap below ("Save TCX to Downloads", "Share TCX"), then "Save & Exit" and "Discard".
+* **Data Compilation:** At save time the 1-second telemetry arrays are converted into BOTH export files, kept with the session so they can be exported again later from history.
+  * **FIT (recommended):** built with `fit_tool`, session tagged `sport: running` + `sub_sport: virtual_activity` — the only pair a hand-uploaded file can carry that makes Strava file it as a **Virtual Run**. Records carry speed, the same single-leg spm cadence the TCX exports as RunCadence, heart rate, position (GPX runs) and altitude (synthesized altitude on structured workouts included); lap/session carry totals, avg/max HR, avg cadence and total ascent.
+  * **TCX (proven fallback):** generated exactly as before — nothing about it changed. The Creator name keeps the "with barometer" suffix so importers trust the app's elevation data. Imports as a plain Run.
+  * A FIT generation failure never blocks the save: the session and its TCX always land, and the FIT actions simply don't offer a file for that run.
+* **Discard:** Exporting saves the session first, so Discard deletes that row and its FIT/TCX files again and reverts the completion badge / best time.
 
 ### Feature 6: Stats & History Page
 * **UI:** A chronological list of historical runs, each showing the route/workout display name.
 * **Metrics:** Weekly, Monthly, Yearly and Lifetime mileage/volume totals.
-* **Export:** Every history row offers "Save to Downloads" and "Share" (3-dot menu or long-press sheet), file named `Sub3_<display name>_<yyyy-MM-dd>.tcx`.
+* **Export:** Every history row offers "Save FIT to Downloads", "Share FIT", "Save TCX to Downloads" and "Share TCX" (3-dot menu or long-press sheet) — each entry shown only when that file exists, so legacy TCX-only sessions and runs whose FIT generation failed offer just the TCX. Files are named `Sub3_<display name>_<yyyy-MM-dd>.fit` / `.tcx`.
 
-### Feature 6b: TCX Export Destinations
-* **Android:** a Kotlin MethodChannel (`com.gapp.sub3/exports`, method `saveToDownloads(fileName, mimeType, content)`) writes into the phone's public Downloads folder — `MediaStore.Downloads` with `IS_PENDING` on API 29+, `Environment.getExternalStoragePublicDirectory` plus a `MediaScannerConnection` scan below that (`WRITE_EXTERNAL_STORAGE` is declared with `maxSdkVersion="28"`). Returns the user-facing path (`Download/<name>.tcx`), which the confirmation snackbar shows.
+### Feature 6b: Export Destinations
+* **Android:** a Kotlin MethodChannel (`com.gapp.sub3/exports`, method `saveToDownloads(fileName, mimeType, bytes)`) writes raw bytes into the phone's public Downloads folder, so binary FIT survives intact and TCX travels the same path UTF-8 encoded — `MediaStore.Downloads` with `IS_PENDING` on API 29+, `Environment.getExternalStoragePublicDirectory` plus a `MediaScannerConnection` scan below that (`WRITE_EXTERNAL_STORAGE` is declared with `maxSdkVersion="28"`). MIME: `.fit` → `application/octet-stream`, `.tcx` → `application/vnd.garmin.tcx+xml`. Returns the user-facing path (`Download/<name>.fit`), which the confirmation snackbar shows.
 * **iOS:** no shared Downloads folder, so both actions open the share sheet and the confirmation says so.
 * **Share:** `share_plus` share sheet, from a temp copy named after the run.
 * Nothing is uploaded anywhere; runs are imported into training sites by hand.

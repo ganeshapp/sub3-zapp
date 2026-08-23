@@ -54,15 +54,17 @@ Pick the APK that matches your device architecture:
 - GPX files without elevation tags are automatically augmented with real-world elevation data from the Open-Elevation API (free DEM lookup).
 - GPX altitude is interpolated from the route's elevation data during the workout.
 - JSON workout altitude is computed from incline percentage and horizontal distance.
-- TCX files include AltitudeMeters in every trackpoint. Creator name includes "with barometer" so the site you import into trusts the app's elevation data.
+- Exported files include altitude in every trackpoint. The TCX Creator name includes "with barometer" so the site you import into trusts the app's elevation data.
 
 ### Export Your Runs
-- Every saved run keeps a TCX file with virtual GPS positions, elevation, heart rate, cadence, and speed.
-- **Save to Downloads** writes the file straight into the phone's Downloads folder, where any file manager can see it. The file is named `Sub3_<run name>_<date>.tcx`.
-- **Share** hands the same file to the system share sheet (email, cloud drive, messaging app).
-- Both actions are on the post-workout summary and on any row in Run History (3-dot menu or long-press).
-- On iOS, where there is no shared Downloads folder, both actions use the share sheet.
-- Upload the TCX to your training site by hand — nothing is sent anywhere automatically.
+- Every saved run keeps two export files with virtual GPS positions, elevation, heart rate, cadence, and speed:
+  - **FIT (recommended):** tagged `sport: running` + `sub_sport: virtual_activity`, so a hand-uploaded file lands on Strava as a **Virtual Run** with no manual editing.
+  - **TCX (proven fallback):** exactly the file the app has always produced; imports as a plain Run.
+- **Save FIT / TCX to Downloads** writes the file straight into the phone's Downloads folder, where any file manager can see it. The file is named `Sub3_<run name>_<date>.fit` / `.tcx`.
+- **Share FIT / TCX** hands the same file to the system share sheet (email, cloud drive, messaging app).
+- All actions are on the post-workout summary and on any row in Run History (3-dot menu or long-press). History entries appear only for the files a session actually has — runs saved before the FIT feature have just the TCX.
+- On iOS, where there is no shared Downloads folder, the actions use the share sheet.
+- Upload the FIT (or TCX) to your training site by hand — nothing is sent anywhere automatically.
 
 ### Auto-Screenshots
 - The app captures a screenshot of the live dashboard every 10 minutes during a workout.
@@ -72,7 +74,7 @@ Pick the APK that matches your device architecture:
 ### Stats and History
 - Volume summaries: This Week, This Month, This Year, and Lifetime.
 - Full chronological run history showing the route or workout name, distance, and pace.
-- Save or share any session's TCX file. Delete any session from history.
+- Save or share any session's FIT or TCX file. Delete any session from history.
 - Completion badges: a run counts as completed once you cover 99% of a route or run 99% of a structured workout's planned time. Routes also keep your best time, and the ghost trace that goes with it.
 
 ### Other
@@ -86,7 +88,7 @@ The app requests the following Android permissions:
 - **Bluetooth** -- Scanning, connecting, and communicating with FTMS treadmills and sensors.
 - **Location** -- Required by Android for BLE scanning (no location data is collected or stored).
 - **Internet** -- Fetching workouts from GitHub and elevation data from Open-Elevation.
-- **Files and Media** -- Saving workout screenshots to the phone's gallery. On Android 9 and older, also writing TCX files into the Downloads folder (Android 10+ needs no permission for that).
+- **Files and Media** -- Saving workout screenshots to the phone's gallery. On Android 9 and older, also writing FIT/TCX files into the Downloads folder (Android 10+ needs no permission for that).
 - **Wake Lock** -- Keeping the screen on during active workouts.
 
 ## Tech Stack
@@ -95,7 +97,7 @@ The app requests the following Android permissions:
 - **State Management:** Riverpod (AsyncNotifier, StateProvider)
 - **Bluetooth:** flutter_blue_plus (FTMS, Heart Rate, RSC services)
 - **Database:** SQLite via sqflite (library items, workout sessions)
-- **Export:** MediaStore via a Kotlin MethodChannel (`com.gapp.sub3/exports`) for the Downloads folder, share_plus for the share sheet
+- **Export:** fit_tool for the FIT encoder, MediaStore via a Kotlin MethodChannel (`com.gapp.sub3/exports`) for the Downloads folder, share_plus for the share sheet
 - **Elevation:** Open-Elevation API (DEM lookup for GPX files without elevation data)
 - **Gallery:** gal (saving screenshots to phone gallery)
 - **Protocols:** FTMS opcodes for speed (0x02), incline (0x03), start/stop/pause (0x07/0x08)

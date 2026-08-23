@@ -57,7 +57,7 @@ class AboutScreen extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                'v1.3.1',
+                'v1.4.0',
                 style: GoogleFonts.inter(
                   fontSize: 13,
                   color: Colors.white24,

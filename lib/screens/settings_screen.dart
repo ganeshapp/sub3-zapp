@@ -188,7 +188,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             _SettingsTile(
               icon: Icons.info_outline,
               title: 'About Sub3',
-              subtitle: 'v1.3.1',
+              subtitle: 'v1.4.0',
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const AboutScreen()),
               ),
